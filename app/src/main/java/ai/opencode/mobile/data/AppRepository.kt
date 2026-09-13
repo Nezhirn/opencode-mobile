@@ -1,7 +1,7 @@
 package ai.opencode.mobile.data
 
 import ai.opencode.mobile.data.local.ConnectionSettings
-import ai.opencode.mobile.data.local.SettingsStore
+import ai.opencode.mobile.data.local.SettingsSource
 import ai.opencode.mobile.data.remote.Agent
 import ai.opencode.mobile.data.remote.CreateSessionRequest
 import ai.opencode.mobile.data.remote.EventEnvelope
@@ -79,7 +79,7 @@ data class ChatState(
     val error: String? = null,
 )
 
-class AppRepository(private val settingsStore: SettingsStore) {
+class AppRepository(private val settingsStore: SettingsSource) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -658,7 +658,12 @@ class AppRepository(private val settingsStore: SettingsStore) {
 
     // --- Event handling ---
 
-    private suspend fun handleEvent(client: OpenCodeClient, envelope: EventEnvelope) {
+    /** Test hook: installs chat state without any network call. */
+    internal fun setChatForTest(state: ChatState) {
+        _chat.value = state
+    }
+
+    internal suspend fun handleEvent(client: OpenCodeClient, envelope: EventEnvelope) {
         // Any event counts as progress for the busy watchdog.
         lastChatEventAt = System.currentTimeMillis()
         // Some events (notably server.connected) may arrive without properties;

@@ -20,13 +20,17 @@ data class ConnectionSettings(
     val allowInsecureTls: Boolean = false,
 ) {
     val isConfigured: Boolean get() = baseUrl.isNotBlank()
+
+    /** Redacts the password so accidental logging cannot leak it. */
+    override fun toString(): String =
+        "ConnectionSettings(baseUrl=$baseUrl, username=$username, password=***, allowInsecureTls=$allowInsecureTls)"
 }
 
-class SettingsStore(private val context: Context) {
+class SettingsStore(private val context: Context) : SettingsSource {
 
     private val cipher = SecretCipher()
 
-    val settings: Flow<ConnectionSettings> = context.dataStore.data.map { prefs ->
+    override val settings: Flow<ConnectionSettings> = context.dataStore.data.map { prefs ->
         ConnectionSettings(
             baseUrl = prefs[KEY_BASE_URL].orEmpty(),
             username = prefs[KEY_USERNAME] ?: DEFAULT_USERNAME,
@@ -51,21 +55,12 @@ class SettingsStore(private val context: Context) {
         return raw
     }
 
-    suspend fun save(settings: ConnectionSettings) {
+    override suspend fun save(settings: ConnectionSettings) {
         context.dataStore.edit { prefs ->
             prefs[KEY_BASE_URL] = settings.baseUrl
             prefs[KEY_USERNAME] = settings.username
             prefs[KEY_PASSWORD] = cipher.encrypt(settings.password)
             prefs[KEY_INSECURE_TLS] = settings.allowInsecureTls
-        }
-    }
-
-    suspend fun clear() {
-        context.dataStore.edit { prefs ->
-            prefs.remove(KEY_BASE_URL)
-            prefs.remove(KEY_USERNAME)
-            prefs.remove(KEY_PASSWORD)
-            prefs.remove(KEY_INSECURE_TLS)
         }
     }
 
