@@ -313,3 +313,14 @@ data class EventEnvelope(
     val type: String? = null,
     val properties: JsonObject? = null,
 )
+
+/**
+ * Payload of a `session.error` event: a discriminated `name` (for example
+ * ProviderAuthError, UnknownError, MessageAbortedError) plus its `data` object,
+ * which usually carries a human readable `message`.
+ */
+@Serializable
+data class SessionErrorInfo(
+    val name: String? = null,
+    val data: JsonObject? = null,
+)

@@ -18,6 +18,7 @@ import ai.opencode.mobile.data.remote.PromptRequest
 import ai.opencode.mobile.data.remote.Provider
 import ai.opencode.mobile.data.remote.QuestionRequest
 import ai.opencode.mobile.data.remote.Session
+import ai.opencode.mobile.data.remote.SessionErrorInfo
 import ai.opencode.mobile.data.remote.TextPartInput
 import ai.opencode.mobile.data.remote.Todo
 import ai.opencode.mobile.data.remote.VcsFileDiff
@@ -39,6 +40,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -477,7 +479,15 @@ class AppRepository(private val settingsStore: SettingsStore) {
 
             "session.error" -> {
                 if (sessionIdOf(props) == _chat.value.sessionId) {
-                    _chat.update { state -> state.copy(busy = false, error = "Session error") }
+                    val error = props.decodeSessionError()
+                    if (error?.name == MESSAGE_ABORTED_ERROR) {
+                        // Abort is a normal cancellation, not a failure to show.
+                        _chat.update { state -> state.copy(busy = false) }
+                    } else {
+                        val message = formatSessionError(error, props["error"])
+                        Log.w(TAG, "session.error: $message")
+                        _chat.update { state -> state.copy(busy = false, error = message) }
+                    }
                 }
             }
 
@@ -519,6 +529,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
         const val TAG = "AppRepository"
         const val RECONNECT_DELAY_MILLIS = 2_000L
         const val TEXT_PART_TYPE = "text"
+        const val MESSAGE_ABORTED_ERROR = "MessageAbortedError"
         val TODO_LIST_SERIALIZER = kotlinx.serialization.builtins.ListSerializer(Todo.serializer())
     }
 }
@@ -534,6 +545,29 @@ private fun JsonObject.decodeMessage(key: String): Message? =
 
 private fun JsonObject.decodePart(key: String): Part? =
     this[key]?.let { runCatching { AppJson.decodeFromJsonElement(Part.serializer(), it) }.getOrNull() }
+
+private fun JsonObject.decodeSessionError(): SessionErrorInfo? =
+    this["error"]?.let {
+        runCatching { AppJson.decodeFromJsonElement(SessionErrorInfo.serializer(), it) }.getOrNull()
+    }
+
+/**
+ * Builds a human readable message from a `session.error` payload. The server
+ * sends a discriminated [SessionErrorInfo.name] plus a data object that usually
+ * contains `message`; when neither is present the raw JSON is shown instead of
+ * swallowing the cause.
+ */
+internal fun formatSessionError(info: SessionErrorInfo?, raw: JsonElement?): String {
+    val name = info?.name
+    val serverMessage = info?.data?.stringOrNull("message")
+    return when {
+        !serverMessage.isNullOrBlank() && !name.isNullOrBlank() -> "$name: $serverMessage"
+        !serverMessage.isNullOrBlank() -> serverMessage
+        !name.isNullOrBlank() -> name
+        raw != null -> raw.toString()
+        else -> "Session error"
+    }
+}
 
 private fun MessageWithParts.toUi(): ChatMessageUi = ChatMessageUi(info = info, parts = parts)
 
