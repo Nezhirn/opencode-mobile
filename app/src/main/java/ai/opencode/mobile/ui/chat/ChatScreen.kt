@@ -69,7 +69,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -196,11 +198,22 @@ fun ChatScreen(
 @Composable
 private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
-    val lastLength = chat.messages.lastOrNull()?.parts?.sumOf { it.text?.length ?: 0 } ?: 0
+    val lastMessage by rememberUpdatedState(chat.messages.lastOrNull())
 
-    LaunchedEffect(chat.messages.size, lastLength, chat.busy) {
-        if (chat.messages.isNotEmpty()) {
-            listState.animateScrollToItem(chat.messages.lastIndex)
+    // Follow the newest content only while the user is already near the bottom:
+    // scrollToItem (not animate) avoids cancelling/restarting an animation on
+    // every streamed token, and scrolling up is never fought.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val total = listState.layoutInfo.totalItemsCount
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val nearBottom = total > 0 && lastVisible >= total - 2
+            val lastTextLength = lastMessage?.parts?.sumOf { it.text?.length ?: 0 } ?: 0
+            Triple(nearBottom, total, lastTextLength)
+        }.collect { (nearBottom, total, _) ->
+            if (nearBottom && total > 0) {
+                listState.scrollToItem(total - 1)
+            }
         }
     }
 
