@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -182,7 +182,7 @@ private fun DiffList(diffs: List<VcsFileDiff>, loading: Boolean, emptyText: Stri
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
-        items(diffs, key = { it.file }) { diff ->
+        itemsIndexed(diffs, key = { index, diff -> "$index:${diff.file}" }) { _, diff ->
             DiffItem(diff)
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
         }
@@ -260,7 +260,7 @@ private fun FileBrowser(
             EmptyState("Empty directory")
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(list, key = { it.path }) { node ->
+                itemsIndexed(list, key = { index, node -> "$index:${node.path}" }) { _, node ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
