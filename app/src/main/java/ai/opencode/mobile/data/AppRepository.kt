@@ -342,7 +342,14 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private suspend fun loadProviders(client: OpenCodeClient) {
         runCatching { client.listProviders() }
             .onSuccess { result ->
-                _providers.update { result.all }
+                // Only providers that are actually configured/authenticated on the
+                // server should be offered; `all` also contains unused catalog
+                // providers. If the server reports none, fall back to everything.
+                val connected = result.connected.toSet()
+                _providers.update {
+                    if (connected.isEmpty()) result.all
+                    else result.all.filter { provider -> provider.id in connected }
+                }
                 ensureSelectedModel(result)
             }
             .onFailure { Log.w(TAG, "loadProviders failed", it) }
