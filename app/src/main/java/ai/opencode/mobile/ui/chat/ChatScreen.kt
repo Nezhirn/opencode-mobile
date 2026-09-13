@@ -731,11 +731,11 @@ private fun ModelSheet(
                             modifier = Modifier.padding(vertical = 6.dp),
                         )
                     }
-                    items(models, key = { it.providerID + it.id }) { model ->
+                    items(models, key = { "${provider.id}/${it.id}" }) { model ->
                         ModelRow(
                             model = model,
-                            selected = selected?.providerID == model.providerID && selected.modelID == model.id,
-                            onClick = { onSelectModel(PromptModel(providerID = model.providerID, modelID = model.id)) },
+                            selected = selected?.providerID == provider.id && selected.modelID == model.id,
+                            onClick = { onSelectModel(PromptModel(providerID = provider.id, modelID = model.id)) },
                         )
                     }
                 }
