@@ -25,8 +25,14 @@
     <string name="sessions_search">Search sessions</string>
     <string name="sessions_empty">No sessions yet. Tap + to start one.</string>
     <string name="sessions_delete">Delete session</string>
-    <string name="sessions_pending_permissions">%1$d pending permission(s)</string>
-    <string name="sessions_pending_questions">%1$d question(s)</string>
+    <plurals name="sessions_pending_permissions">
+        <item quantity="one">%1$d pending permission</item>
+        <item quantity="other">%1$d pending permissions</item>
+    </plurals>
+    <plurals name="sessions_pending_questions">
+        <item quantity="one">%1$d question</item>
+        <item quantity="other">%1$d questions</item>
+    </plurals>
     <string name="action_dismiss">Dismiss</string>
 
     <!-- Chat -->
@@ -71,5 +77,8 @@
     <string name="files_file">File</string>
     <string name="files_close">Close</string>
     <string name="files_binary">(binary file)</string>
-    <string name="files_show_all">Show all (%1$d characters)</string>
+    <plurals name="files_show_all">
+        <item quantity="one">Show all (%1$d character)</item>
+        <item quantity="other">Show all (%1$d characters)</item>
+    </plurals>
 </resources>

@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -139,11 +140,23 @@ fun SessionsScreen(
                 Banner(
                     text = buildString {
                         if (permissions.isNotEmpty()) {
-                            append(stringResource(R.string.sessions_pending_permissions, permissions.size))
+                            append(
+                                pluralStringResource(
+                                    R.plurals.sessions_pending_permissions,
+                                    permissions.size,
+                                    permissions.size,
+                                ),
+                            )
                         }
                         if (permissions.isNotEmpty() && questions.isNotEmpty()) append(" · ")
                         if (questions.isNotEmpty()) {
-                            append(stringResource(R.string.sessions_pending_questions, questions.size))
+                            append(
+                                pluralStringResource(
+                                    R.plurals.sessions_pending_questions,
+                                    questions.size,
+                                    questions.size,
+                                ),
+                            )
                         }
                     },
                     container = MaterialTheme.colorScheme.primaryContainer,

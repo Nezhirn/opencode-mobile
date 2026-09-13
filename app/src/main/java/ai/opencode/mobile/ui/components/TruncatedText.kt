@@ -11,7 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.TextStyle
 
 /**
@@ -37,7 +37,7 @@ fun TruncatedText(
         )
         if (isTruncated) {
             TextButton(onClick = { expanded = true }) {
-                Text(stringResource(R.string.files_show_all, text.length))
+                Text(pluralStringResource(R.plurals.files_show_all, text.length, text.length))
             }
         }
     }
