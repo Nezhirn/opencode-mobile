@@ -4,6 +4,7 @@ import ai.opencode.mobile.data.remote.FileContent
 import ai.opencode.mobile.data.remote.FileNode
 import ai.opencode.mobile.data.remote.VcsFileDiff
 import ai.opencode.mobile.data.remote.VcsFileStatus
+import ai.opencode.mobile.ui.components.TruncatedText
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -221,7 +222,7 @@ private fun PatchText(patch: String) {
         color = Color.Black.copy(alpha = 0.25f),
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(max = 420.dp),
     ) {
-        Text(
+        TruncatedText(
             text = patch,
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             modifier = Modifier.verticalScroll(rememberScrollState()).padding(8.dp),
@@ -348,7 +349,7 @@ private fun FileViewerDialog(file: FileContent, onClose: () -> Unit) {
                 }
                 HorizontalDivider()
                 val text = if (file.type == "binary") "(binary file)" else file.content
-                Text(
+                TruncatedText(
                     text = text,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier

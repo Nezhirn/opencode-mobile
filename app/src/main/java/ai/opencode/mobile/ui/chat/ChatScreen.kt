@@ -9,6 +9,7 @@ import ai.opencode.mobile.data.remote.PermissionRequest
 import ai.opencode.mobile.data.remote.PromptModel
 import ai.opencode.mobile.data.remote.Provider
 import ai.opencode.mobile.data.remote.QuestionRequest
+import ai.opencode.mobile.ui.components.TruncatedText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -439,7 +440,7 @@ private fun MonoBlock(title: String, text: String) {
             modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
         ) {
             SelectionContainer {
-                Text(
+                TruncatedText(
                     text = text,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier
