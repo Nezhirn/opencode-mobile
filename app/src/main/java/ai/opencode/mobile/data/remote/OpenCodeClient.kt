@@ -47,7 +47,7 @@ class OpenCodeClient(
     baseUrl: String,
     private val username: String? = null,
     private val password: String? = null,
-    allowInsecureTls: Boolean = false,
+    private val allowInsecureTls: Boolean = false,
 ) {
     val baseUrl: String = normalizeBaseUrl(baseUrl)
 
