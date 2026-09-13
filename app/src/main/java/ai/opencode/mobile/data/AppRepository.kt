@@ -16,6 +16,7 @@ import ai.opencode.mobile.data.remote.PermissionRequest
 import ai.opencode.mobile.data.remote.PromptModel
 import ai.opencode.mobile.data.remote.PromptRequest
 import ai.opencode.mobile.data.remote.Provider
+import ai.opencode.mobile.data.remote.ProviderList
 import ai.opencode.mobile.data.remote.QuestionRequest
 import ai.opencode.mobile.data.remote.Session
 import ai.opencode.mobile.data.remote.SessionErrorInfo
@@ -226,8 +227,21 @@ class AppRepository(private val settingsStore: SettingsStore) {
 
     private suspend fun loadProviders(client: OpenCodeClient) {
         runCatching { client.listProviders() }
-            .onSuccess { result -> _providers.update { result.all } }
+            .onSuccess { result ->
+                _providers.update { result.all }
+                ensureSelectedModel(result)
+            }
             .onFailure { Log.w(TAG, "loadProviders failed", it) }
+    }
+
+    /**
+     * Resolves a default model once, so newly created sessions can send prompts
+     * without the user opening the model picker first. An explicit user choice is
+     * never overwritten.
+     */
+    private fun ensureSelectedModel(providers: ProviderList) {
+        if (_selectedModel.value != null) return
+        _selectedModel.value = resolveDefaultModel(providers)
     }
 
     private suspend fun loadAgents(client: OpenCodeClient) {
@@ -329,9 +343,18 @@ class AppRepository(private val settingsStore: SettingsStore) {
         scope.launch {
             val client = clientFlow.value ?: return@launch
             val sessionId = _chat.value.sessionId ?: return@launch
+            val model = _selectedModel.value
+            if (model == null) {
+                // Sending without a model is rejected by the server, so surface a
+                // clear message instead of a cryptic session.error.
+                _chat.update { state ->
+                    state.copy(error = "No model available. Pick a model or configure a provider.")
+                }
+                return@launch
+            }
             _chat.update { state -> state.copy(busy = true, error = null) }
             val request = PromptRequest(
-                model = _selectedModel.value,
+                model = model,
                 agent = _selectedAgent.value,
                 parts = listOf(TextPartInput(type = TEXT_PART_TYPE, text = trimmed)),
             )
@@ -614,6 +637,29 @@ internal fun formatSessionError(info: SessionErrorInfo?, raw: JsonElement?): Str
         raw != null -> raw.toString()
         else -> "Session error"
     }
+}
+
+/**
+ * Picks a usable default model from the provider list. The server-declared
+ * `default` map wins; otherwise the first model of a connected (or, failing
+ * that, any) provider is used. Returns null when no model is available.
+ */
+internal fun resolveDefaultModel(providers: ProviderList): PromptModel? {
+    providers.default.entries.firstOrNull { (providerId, modelId) ->
+        providerId.isNotBlank() && modelId.isNotBlank()
+    }?.let { (providerId, modelId) -> return PromptModel(providerId, modelId) }
+
+    val providersById = providers.all.associateBy { it.id }
+    val candidates = providers.connected.ifEmpty { providers.all.map { it.id } }
+    candidates.forEach { providerId ->
+        val modelId = providersById[providerId]?.models?.keys?.firstOrNull()
+        if (!modelId.isNullOrBlank()) return PromptModel(providerId, modelId)
+    }
+
+    providers.all.firstOrNull { it.models.isNotEmpty() }?.let { provider ->
+        provider.models.keys.firstOrNull()?.let { return PromptModel(provider.id, it) }
+    }
+    return null
 }
 
 private fun MessageWithParts.toUi(): ChatMessageUi = ChatMessageUi(info = info, parts = parts)
