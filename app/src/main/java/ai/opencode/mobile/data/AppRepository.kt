@@ -30,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -85,6 +86,8 @@ data class ChatState(
 class AppRepository(private val settingsStore: SettingsStore) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private var loadChatJob: Job? = null
 
     @Volatile
     private var serverVersion: String? = null
@@ -237,10 +240,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
         // Restart the event stream as well: a Refresh tap must recover from a
         // stream that stopped on a 4xx without requiring an app restart.
         reconnect()
-        scope.launch {
-            val client = clientFlow.value ?: return@launch
-            _chat.value.sessionId?.let { loadChat(client, it) }
-        }
+        _chat.value.sessionId?.let { openChat(it) }
     }
 
     suspend fun saveSettings(config: ConnectionSettings) {
@@ -341,33 +341,44 @@ class AppRepository(private val settingsStore: SettingsStore) {
     // --- Chat ---
 
     fun openChat(sessionId: String) {
-        scope.launch {
-            val client = clientFlow.value ?: return@launch
-            loadChat(client, sessionId)
-        }
+        val client = clientFlow.value ?: return
+        // Cancel any in-flight load so a slower previous session cannot land in
+        // the newly opened chat.
+        loadChatJob?.cancel()
+        _chat.value = ChatState(
+            sessionId = sessionId,
+            title = _sessions.value.firstOrNull { it.id == sessionId }?.title.orEmpty(),
+            loading = true,
+        )
+        loadChatJob = scope.launch { loadChat(client, sessionId) }
     }
 
     fun closeChat() {
+        loadChatJob?.cancel()
         _chat.value = ChatState()
     }
 
     private suspend fun loadChat(client: OpenCodeClient, sessionId: String) {
-        val session = _sessions.value.firstOrNull { it.id == sessionId }
-        _chat.value = ChatState(
-            sessionId = sessionId,
-            title = session?.title.orEmpty(),
-            loading = true,
-        )
         runCatching { client.getMessages(sessionId) }
             .onSuccess { messages ->
-                _chat.update { state -> state.copy(messages = messages.map { it.toUi() }, loading = false) }
+                _chat.update { state ->
+                    if (state.sessionId != sessionId) state
+                    else state.copy(messages = messages.map { it.toUi() }, loading = false)
+                }
             }
             .onFailure { error ->
                 Log.w(TAG, "loadChat($sessionId) messages failed", error)
-                _chat.update { state -> state.copy(loading = false, error = error.message) }
+                _chat.update { state ->
+                    if (state.sessionId != sessionId) state
+                    else state.copy(loading = false, error = error.message)
+                }
             }
         runCatching { client.todos(sessionId) }
-            .onSuccess { todos -> _chat.update { state -> state.copy(todos = todos) } }
+            .onSuccess { todos ->
+                _chat.update { state ->
+                    if (state.sessionId != sessionId) state else state.copy(todos = todos)
+                }
+            }
             .onFailure { Log.w(TAG, "loadChat($sessionId) todos failed", it) }
     }
 
