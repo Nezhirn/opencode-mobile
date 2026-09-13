@@ -137,7 +137,7 @@ fun ChatScreen(
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Column(modifier = Modifier.fillMaxSize().padding(padding).imePadding()) {
             if (chat.todos.isNotEmpty()) {
                 TodoStrip(chat.todos)
             }
@@ -677,8 +677,7 @@ private fun InputBar(busy: Boolean, onSend: (String) -> Unit, onStop: () -> Unit
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp)
-                .imePadding(),
+                .padding(8.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
             OutlinedTextField(
