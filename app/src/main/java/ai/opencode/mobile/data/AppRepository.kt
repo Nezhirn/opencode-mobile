@@ -100,6 +100,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private val deltaBuffers = ConcurrentHashMap<String, StringBuilder>()
     private var deltaFlushJob: Job? = null
 
+    /** Id of the locally echoed user message, replaced when the server echoes it. */
+    @Volatile
+    private var pendingLocalMessageId: String? = null
+
     @Volatile
     private var serverVersion: String? = null
 
@@ -490,7 +494,15 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 }
                 return@launch
             }
-            _chat.update { state -> state.copy(busy = true, error = null) }
+            val localId = "local-${System.currentTimeMillis()}"
+            pendingLocalMessageId = localId
+            _chat.update { state ->
+                state.copy(
+                    busy = true,
+                    error = null,
+                    messages = state.messages + localUserMessage(localId, trimmed),
+                )
+            }
             armBusyWatchdog()
             val request = PromptRequest(
                 model = model,
@@ -500,7 +512,14 @@ class AppRepository(private val settingsStore: SettingsStore) {
             runCatching { client.promptAsync(sessionId, request) }
                 .onFailure { error ->
                     Log.w(TAG, "sendPrompt($sessionId) failed", error)
-                    _chat.update { state -> state.copy(busy = false, error = error.message ?: "Failed to send prompt") }
+                    pendingLocalMessageId = null
+                    _chat.update { state ->
+                        state.copy(
+                            busy = false,
+                            error = error.message ?: "Failed to send prompt",
+                            messages = state.messages.filterNot { it.info.id == localId },
+                        )
+                    }
                 }
         }
     }
@@ -665,6 +684,14 @@ class AppRepository(private val settingsStore: SettingsStore) {
             "message.updated" -> {
                 val info = props.decodeMessage("info") ?: return
                 if (appliesToCurrentChat(props)) {
+                    // Replace the optimistic local echo with the server's copy.
+                    val pending = pendingLocalMessageId
+                    if (pending != null && info.role == USER_ROLE) {
+                        pendingLocalMessageId = null
+                        _chat.update { state ->
+                            state.copy(messages = state.messages.filterNot { it.info.id == pending })
+                        }
+                    }
                     _chat.update { state -> state.upsertMessage(info) }
                 }
             }
@@ -816,6 +843,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
         const val BUSY_TIMEOUT_MILLIS = 300_000L
         const val DELTA_FLUSH_INTERVAL_MILLIS = 50L
         const val TEXT_PART_TYPE = "text"
+        const val USER_ROLE = "user"
         const val MESSAGE_ABORTED_ERROR = "MessageAbortedError"
         val TODO_LIST_SERIALIZER = kotlinx.serialization.builtins.ListSerializer(Todo.serializer())
     }
@@ -880,6 +908,11 @@ internal fun resolveDefaultModel(providers: ProviderList): PromptModel? {
 }
 
 private fun MessageWithParts.toUi(): ChatMessageUi = ChatMessageUi(info = info, parts = parts)
+
+private fun localUserMessage(id: String, text: String): ChatMessageUi = ChatMessageUi(
+    info = Message(id = id, role = "user"),
+    parts = listOf(Part(id = "$id-part", messageID = id, type = "text", text = text)),
+)
 
 internal fun ChatState.upsertMessage(info: Message): ChatState {
     val index = messages.indexOfFirst { it.info.id == info.id }
