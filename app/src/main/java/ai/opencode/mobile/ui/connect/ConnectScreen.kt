@@ -147,7 +147,7 @@ fun ConnectScreen(
         Spacer(Modifier.height(20.dp))
         Button(
             onClick = { viewModel.save(baseUrl, username, password, allowInsecureTls) },
-            enabled = baseUrl.isNotBlank(),
+            enabled = baseUrl.isNotBlank() && connection !is ConnectionState.Connecting,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Connect")

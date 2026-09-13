@@ -24,6 +24,10 @@ class ConnectViewModel(private val repository: AppRepository) : ViewModel() {
                     allowInsecureTls = allowInsecureTls,
                 ),
             )
+            // Saving identical settings emits nothing new (StateFlow dedupes), so
+            // explicitly restart the connection attempt; otherwise Connect looks
+            // like a no-op.
+            repository.reconnect()
         }
     }
 
