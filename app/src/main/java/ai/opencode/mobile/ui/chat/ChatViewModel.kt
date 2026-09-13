@@ -23,11 +23,11 @@ class ChatViewModel(private val repository: AppRepository) : ViewModel() {
     private val sessionId = MutableStateFlow<String?>(null)
 
     val permissions = combine(repository.permissions, sessionId) { list, id ->
-        list.filter { it.sessionID == id }
+        if (id == null) emptyList() else list.filter { repository.sessionMatches(it.sessionID, id) }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val questions = combine(repository.questions, sessionId) { list, id ->
-        list.filter { it.sessionID == id }
+        if (id == null) emptyList() else list.filter { repository.sessionMatches(it.sessionID, id) }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun open(id: String) {

@@ -26,6 +26,7 @@ import ai.opencode.mobile.data.remote.VcsFileDiff
 import ai.opencode.mobile.data.remote.VcsFileStatus
 import ai.opencode.mobile.data.remote.VcsInfo
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +87,12 @@ class AppRepository(private val settingsStore: SettingsStore) {
 
     @Volatile
     private var serverVersion: String? = null
+
+    /**
+     * Child session id -> parent session id, used to attribute events emitted by
+     * subagent sessions to the chat the user is looking at.
+     */
+    private val sessionParentById = ConcurrentHashMap<String, String>()
 
     val settings: StateFlow<ConnectionSettings> = settingsStore.settings
         .stateIn(scope, SharingStarted.Eagerly, ConnectionSettings())
@@ -221,6 +228,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
         runCatching { client.listSessions() }
             .onSuccess { list ->
                 _sessions.update { list.sortedByDescending { session -> session.time?.updated ?: 0 } }
+                sessionParentById.clear()
+                list.forEach { session ->
+                    session.parentID?.let { parentId -> sessionParentById[session.id] = parentId }
+                }
             }
             .onFailure { Log.w(TAG, "loadSessions failed", it) }
     }
@@ -472,19 +483,25 @@ class AppRepository(private val settingsStore: SettingsStore) {
                         else -> current.map { if (it.id == session.id) session else it }
                     }
                 }
+                when (envelope.type) {
+                    "session.deleted" -> sessionParentById.remove(session.id)
+                    else -> session.parentID
+                        ?.let { parentId -> sessionParentById[session.id] = parentId }
+                        ?: sessionParentById.remove(session.id)
+                }
                 if (envelope.type == "session.updated") maybeUpdateChatTitle(props)
             }
 
             "message.updated" -> {
                 val info = props.decodeMessage("info") ?: return
-                if (sessionIdOf(props) == _chat.value.sessionId) {
+                if (appliesToCurrentChat(props)) {
                     _chat.update { state -> state.upsertMessage(info) }
                 }
             }
 
             "message.removed" -> {
                 val messageId = props.stringOrNull("messageID") ?: return
-                if (sessionIdOf(props) == _chat.value.sessionId) {
+                if (appliesToCurrentChat(props)) {
                     _chat.update { state ->
                         state.copy(messages = state.messages.filterNot { it.info.id == messageId })
                     }
@@ -493,14 +510,14 @@ class AppRepository(private val settingsStore: SettingsStore) {
 
             "message.part.updated" -> {
                 val part = props.decodePart("part") ?: return
-                if (sessionIdOf(props) == _chat.value.sessionId) {
+                if (appliesToCurrentChat(props)) {
                     _chat.update { state -> state.upsertPart(part) }
                 }
             }
 
             "message.part.removed" -> {
                 val partId = props.stringOrNull("partID") ?: return
-                if (sessionIdOf(props) == _chat.value.sessionId) {
+                if (appliesToCurrentChat(props)) {
                     _chat.update { state ->
                         state.copy(
                             messages = state.messages.map { message ->
@@ -512,7 +529,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
             }
 
             "message.part.delta" -> {
-                if (sessionIdOf(props) != _chat.value.sessionId) return
+                if (!appliesToCurrentChat(props)) return
                 val partId = props.stringOrNull("partID") ?: return
                 val field = props.stringOrNull("field") ?: "text"
                 val delta = props.stringOrNull("delta") ?: return
@@ -567,7 +584,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
             }
 
             "todo.updated" -> {
-                if (sessionIdOf(props) == _chat.value.sessionId) {
+                if (appliesToCurrentChat(props)) {
                     val todos = props["todos"]?.let {
                         runCatching { AppJson.decodeFromJsonElement(TODO_LIST_SERIALIZER, it) }.getOrNull()
                     } ?: return
@@ -587,12 +604,30 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private fun sessionIdOf(props: JsonObject): String? = props.stringOrNull("sessionID")
 
     /**
+     * True when [itemSessionId] is the target session or one of its descendants.
+     * Subagent sessions run under their own id but belong to the open chat.
+     */
+    fun sessionMatches(itemSessionId: String, targetSessionId: String): Boolean =
+        itemSessionId == targetSessionId || rootSessionId(itemSessionId) == targetSessionId
+
+    private fun rootSessionId(sessionId: String): String {
+        var current = sessionId
+        val visited = HashSet<String>()
+        while (visited.add(current)) {
+            val parent = sessionParentById[current] ?: return current
+            current = parent
+        }
+        return current
+    }
+
+    /**
      * The `sessionID` of `session.error` is optional. Without it the event cannot
      * be attributed precisely, so it applies to whichever chat is currently open.
      */
     private fun appliesToCurrentChat(props: JsonObject): Boolean {
-        val sessionId = sessionIdOf(props) ?: return _chat.value.sessionId != null
-        return sessionId == _chat.value.sessionId
+        val targetSessionId = _chat.value.sessionId ?: return false
+        val sessionId = sessionIdOf(props) ?: return true
+        return sessionMatches(sessionId, targetSessionId)
     }
 
     private companion object {
