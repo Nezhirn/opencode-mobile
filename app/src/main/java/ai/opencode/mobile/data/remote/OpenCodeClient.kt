@@ -1,6 +1,8 @@
 package ai.opencode.mobile.data.remote
 
+import ai.opencode.mobile.BuildConfig
 import android.annotation.SuppressLint
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -20,6 +22,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.logging.HttpLoggingInterceptor
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
@@ -66,6 +69,16 @@ class OpenCodeClient(
             .writeTimeout(30, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(true)
+        if (BuildConfig.DEBUG) {
+            // BODY logging is development-only; credentials are redacted and it
+            // is never registered in release builds.
+            builder.addInterceptor(
+                HttpLoggingInterceptor { message -> Log.d(TAG, message) }.apply {
+                    level = HttpLoggingInterceptor.Level.BODY
+                    redactHeader("Authorization")
+                },
+            )
+        }
         if (allowInsecureTls) {
             val trustManager = object : X509TrustManager {
                 override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
@@ -282,6 +295,7 @@ class OpenCodeClient(
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 runCatching { json.decodeFromString<EventEnvelope>(data) }
                     .onSuccess { trySend(it) }
+                    .onFailure { error -> Log.w(TAG, "Failed to parse event: $data", error) }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
@@ -301,6 +315,7 @@ class OpenCodeClient(
     }
 
     companion object {
+        private const val TAG = "OpenCodeClient"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         fun normalizeBaseUrl(input: String): String {

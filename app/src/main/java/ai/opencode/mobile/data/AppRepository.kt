@@ -23,6 +23,7 @@ import ai.opencode.mobile.data.remote.Todo
 import ai.opencode.mobile.data.remote.VcsFileDiff
 import ai.opencode.mobile.data.remote.VcsFileStatus
 import ai.opencode.mobile.data.remote.VcsInfo
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -172,6 +173,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
             serverVersion = it.version
             _connection.value = ConnectionState.Connected(it.version)
         }.onFailure {
+            Log.w(TAG, "health check failed", it)
             _connection.value = ConnectionState.Error(it.message ?: "Connection failed")
             return
         }
@@ -201,30 +203,31 @@ class AppRepository(private val settingsStore: SettingsStore) {
             .onSuccess { list ->
                 _sessions.update { list.sortedByDescending { session -> session.time?.updated ?: 0 } }
             }
+            .onFailure { Log.w(TAG, "loadSessions failed", it) }
     }
 
     private suspend fun loadProviders(client: OpenCodeClient) {
-        runCatching { client.listProviders() }.onSuccess { result ->
-            _providers.update { result.all }
-        }
+        runCatching { client.listProviders() }
+            .onSuccess { result -> _providers.update { result.all } }
+            .onFailure { Log.w(TAG, "loadProviders failed", it) }
     }
 
     private suspend fun loadAgents(client: OpenCodeClient) {
-        runCatching { client.listAgents() }.onSuccess { list ->
-            _agents.update { list.filter { agent -> agent.hidden != true } }
-        }
+        runCatching { client.listAgents() }
+            .onSuccess { list -> _agents.update { list.filter { agent -> agent.hidden != true } } }
+            .onFailure { Log.w(TAG, "loadAgents failed", it) }
     }
 
     private suspend fun loadPermissions(client: OpenCodeClient) {
-        runCatching { client.listPermissions() }.onSuccess { list ->
-            _permissions.update { list }
-        }
+        runCatching { client.listPermissions() }
+            .onSuccess { list -> _permissions.update { list } }
+            .onFailure { Log.w(TAG, "loadPermissions failed", it) }
     }
 
     private suspend fun loadQuestions(client: OpenCodeClient) {
-        runCatching { client.listQuestions() }.onSuccess { list ->
-            _questions.update { list }
-        }
+        runCatching { client.listQuestions() }
+            .onSuccess { list -> _questions.update { list } }
+            .onFailure { Log.w(TAG, "loadQuestions failed", it) }
     }
 
     // --- Session actions ---
@@ -234,7 +237,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
             val client = clientFlow.value ?: return@launch
             runCatching { client.createSession(CreateSessionRequest(title = title)) }
                 .onSuccess { loadSessions(client) }
-                .onFailure { _connection.value = ConnectionState.Error(it.message ?: "Failed to create session") }
+                .onFailure {
+                    Log.w(TAG, "createSession failed", it)
+                    _connection.value = ConnectionState.Error(it.message ?: "Failed to create session")
+                }
         }
     }
 
@@ -246,6 +252,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
                     _sessions.update { current -> current.filterNot { it.id == sessionId } }
                     if (_chat.value.sessionId == sessionId) _chat.value = ChatState()
                 }
+                .onFailure { Log.w(TAG, "deleteSession($sessionId) failed", it) }
         }
     }
 
@@ -274,10 +281,12 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 _chat.update { state -> state.copy(messages = messages.map { it.toUi() }, loading = false) }
             }
             .onFailure { error ->
+                Log.w(TAG, "loadChat($sessionId) messages failed", error)
                 _chat.update { state -> state.copy(loading = false, error = error.message) }
             }
         runCatching { client.todos(sessionId) }
             .onSuccess { todos -> _chat.update { state -> state.copy(todos = todos) } }
+            .onFailure { Log.w(TAG, "loadChat($sessionId) todos failed", it) }
     }
 
     fun sendPrompt(text: String) {
@@ -294,6 +303,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
             )
             runCatching { client.promptAsync(sessionId, request) }
                 .onFailure { error ->
+                    Log.w(TAG, "sendPrompt($sessionId) failed", error)
                     _chat.update { state -> state.copy(busy = false, error = error.message ?: "Failed to send prompt") }
                 }
         }
@@ -304,6 +314,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
             val client = clientFlow.value ?: return@launch
             val sessionId = _chat.value.sessionId ?: return@launch
             runCatching { client.abort(sessionId) }
+                .onFailure { Log.w(TAG, "abort($sessionId) failed", it) }
             _chat.update { state -> state.copy(busy = false) }
         }
     }
@@ -325,6 +336,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 .onSuccess {
                     _permissions.update { current -> current.filterNot { it.id == requestId } }
                 }
+                .onFailure { Log.w(TAG, "replyPermission($requestId) failed", it) }
         }
     }
 
@@ -335,6 +347,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 .onSuccess {
                     _questions.update { current -> current.filterNot { it.id == requestId } }
                 }
+                .onFailure { Log.w(TAG, "replyQuestion($requestId) failed", it) }
         }
     }
 
@@ -345,27 +358,41 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 .onSuccess {
                     _questions.update { current -> current.filterNot { it.id == requestId } }
                 }
+                .onFailure { Log.w(TAG, "rejectQuestion($requestId) failed", it) }
         }
     }
 
     // --- Files and VCS ---
 
     suspend fun listFiles(path: String): List<FileNode> =
-        runCatching { clientFlow.value?.listFiles(path) }.getOrNull() ?: emptyList()
+        runCatching { clientFlow.value?.listFiles(path) }
+            .onFailure { Log.w(TAG, "listFiles($path) failed", it) }
+            .getOrNull() ?: emptyList()
 
     suspend fun readFile(path: String): FileContent? =
-        runCatching { clientFlow.value?.readFile(path) }.getOrNull()
+        runCatching { clientFlow.value?.readFile(path) }
+            .onFailure { Log.w(TAG, "readFile($path) failed", it) }
+            .getOrNull()
 
-    suspend fun vcsInfo(): VcsInfo? = runCatching { clientFlow.value?.vcsInfo() }.getOrNull()
+    suspend fun vcsInfo(): VcsInfo? =
+        runCatching { clientFlow.value?.vcsInfo() }
+            .onFailure { Log.w(TAG, "vcsInfo failed", it) }
+            .getOrNull()
 
     suspend fun vcsStatus(): List<VcsFileStatus> =
-        runCatching { clientFlow.value?.vcsStatus() }.getOrNull() ?: emptyList()
+        runCatching { clientFlow.value?.vcsStatus() }
+            .onFailure { Log.w(TAG, "vcsStatus failed", it) }
+            .getOrNull() ?: emptyList()
 
     suspend fun vcsDiff(mode: String): List<VcsFileDiff> =
-        runCatching { clientFlow.value?.vcsDiff(mode) }.getOrNull() ?: emptyList()
+        runCatching { clientFlow.value?.vcsDiff(mode) }
+            .onFailure { Log.w(TAG, "vcsDiff($mode) failed", it) }
+            .getOrNull() ?: emptyList()
 
     suspend fun sessionDiff(sessionId: String): List<VcsFileDiff> =
-        runCatching { clientFlow.value?.sessionDiff(sessionId) }.getOrNull() ?: emptyList()
+        runCatching { clientFlow.value?.sessionDiff(sessionId) }
+            .onFailure { Log.w(TAG, "sessionDiff($sessionId) failed", it) }
+            .getOrNull() ?: emptyList()
 
     // --- Event handling ---
 
@@ -489,6 +516,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private fun sessionIdOf(props: JsonObject): String? = props.stringOrNull("sessionID")
 
     private companion object {
+        const val TAG = "AppRepository"
         const val RECONNECT_DELAY_MILLIS = 2_000L
         const val TEXT_PART_TYPE = "text"
         val TODO_LIST_SERIALIZER = kotlinx.serialization.builtins.ListSerializer(Todo.serializer())
