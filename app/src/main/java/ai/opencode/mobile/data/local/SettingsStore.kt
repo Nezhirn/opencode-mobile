@@ -1,0 +1,73 @@
+package ai.opencode.mobile.data.local
+
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "opencode_settings")
+
+data class ConnectionSettings(
+    val baseUrl: String = "",
+    val username: String = "opencode",
+    val password: String = "",
+    val allowInsecureTls: Boolean = false,
+) {
+    val isConfigured: Boolean get() = baseUrl.isNotBlank()
+}
+
+class SettingsStore(private val context: Context) {
+
+    private val cipher = SecretCipher()
+
+    val settings: Flow<ConnectionSettings> = context.dataStore.data.map { prefs ->
+        ConnectionSettings(
+            baseUrl = prefs[KEY_BASE_URL].orEmpty(),
+            username = prefs[KEY_USERNAME] ?: DEFAULT_USERNAME,
+            password = readPassword(prefs[KEY_PASSWORD]),
+            allowInsecureTls = prefs[KEY_INSECURE_TLS] ?: false,
+        )
+    }
+
+    /**
+     * Decrypts the stored password. Values that fail to decrypt are treated as
+     * legacy plaintext (written before encryption was introduced) and returned
+     * as-is; they get encrypted on the next save.
+     */
+    private fun readPassword(stored: String?): String {
+        val raw = stored.orEmpty()
+        if (raw.isEmpty()) return ""
+        return cipher.decrypt(raw) ?: raw
+    }
+
+    suspend fun save(settings: ConnectionSettings) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_BASE_URL] = settings.baseUrl
+            prefs[KEY_USERNAME] = settings.username
+            prefs[KEY_PASSWORD] = cipher.encrypt(settings.password)
+            prefs[KEY_INSECURE_TLS] = settings.allowInsecureTls
+        }
+    }
+
+    suspend fun clear() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(KEY_BASE_URL)
+            prefs.remove(KEY_USERNAME)
+            prefs.remove(KEY_PASSWORD)
+            prefs.remove(KEY_INSECURE_TLS)
+        }
+    }
+
+    private companion object {
+        const val DEFAULT_USERNAME = "opencode"
+        val KEY_BASE_URL = stringPreferencesKey("base_url")
+        val KEY_USERNAME = stringPreferencesKey("username")
+        val KEY_PASSWORD = stringPreferencesKey("password")
+        val KEY_INSECURE_TLS = booleanPreferencesKey("allow_insecure_tls")
+    }
+}
