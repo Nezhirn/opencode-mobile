@@ -149,6 +149,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private val _sessionError = MutableStateFlow<String?>(null)
     val sessionError: StateFlow<String?> = _sessionError.asStateFlow()
 
+    /** Transient error from a user action (files/VCS) that UI should surface. */
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError: StateFlow<String?> = _actionError.asStateFlow()
+
     /**
      * One-shot navigation requests (session id to open). A Channel is used instead
      * of a StateFlow so returning to the sessions list does not re-trigger it.
@@ -326,6 +330,14 @@ class AppRepository(private val settingsStore: SettingsStore) {
         _sessionError.value = null
     }
 
+    fun clearActionError() {
+        _actionError.value = null
+    }
+
+    private fun reportActionError(message: String?) {
+        _actionError.value = message ?: "Action failed"
+    }
+
     fun deleteSession(sessionId: String) {
         scope.launch {
             val client = clientFlow.value ?: return@launch
@@ -334,7 +346,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
                     _sessions.update { current -> current.filterNot { it.id == sessionId } }
                     if (_chat.value.sessionId == sessionId) _chat.value = ChatState()
                 }
-                .onFailure { Log.w(TAG, "deleteSession($sessionId) failed", it) }
+                .onFailure {
+                    Log.w(TAG, "deleteSession($sessionId) failed", it)
+                    _sessionError.value = it.message ?: "Failed to delete session"
+                }
         }
     }
 
@@ -416,8 +431,13 @@ class AppRepository(private val settingsStore: SettingsStore) {
             val client = clientFlow.value ?: return@launch
             val sessionId = _chat.value.sessionId ?: return@launch
             runCatching { client.abort(sessionId) }
-                .onFailure { Log.w(TAG, "abort($sessionId) failed", it) }
-            _chat.update { state -> state.copy(busy = false) }
+                .onSuccess { _chat.update { state -> state.copy(busy = false) } }
+                .onFailure { error ->
+                    Log.w(TAG, "abort($sessionId) failed", error)
+                    _chat.update { state ->
+                        state.copy(busy = false, error = error.message ?: "Failed to abort")
+                    }
+                }
         }
     }
 
@@ -438,7 +458,12 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 .onSuccess {
                     _permissions.update { current -> current.filterNot { it.id == requestId } }
                 }
-                .onFailure { Log.w(TAG, "replyPermission($requestId) failed", it) }
+                .onFailure {
+                    Log.w(TAG, "replyPermission($requestId) failed", it)
+                    _chat.update { state ->
+                        state.copy(error = it.message ?: "Failed to reply to permission")
+                    }
+                }
         }
     }
 
@@ -449,7 +474,12 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 .onSuccess {
                     _questions.update { current -> current.filterNot { it.id == requestId } }
                 }
-                .onFailure { Log.w(TAG, "replyQuestion($requestId) failed", it) }
+                .onFailure {
+                    Log.w(TAG, "replyQuestion($requestId) failed", it)
+                    _chat.update { state ->
+                        state.copy(error = it.message ?: "Failed to reply to question")
+                    }
+                }
         }
     }
 
@@ -460,7 +490,12 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 .onSuccess {
                     _questions.update { current -> current.filterNot { it.id == requestId } }
                 }
-                .onFailure { Log.w(TAG, "rejectQuestion($requestId) failed", it) }
+                .onFailure {
+                    Log.w(TAG, "rejectQuestion($requestId) failed", it)
+                    _chat.update { state ->
+                        state.copy(error = it.message ?: "Failed to reject question")
+                    }
+                }
         }
     }
 
@@ -468,32 +503,50 @@ class AppRepository(private val settingsStore: SettingsStore) {
 
     suspend fun listFiles(path: String): List<FileNode> =
         runCatching { clientFlow.value?.listFiles(path) }
-            .onFailure { Log.w(TAG, "listFiles($path) failed", it) }
+            .onFailure {
+                Log.w(TAG, "listFiles($path) failed", it)
+                reportActionError(it.message ?: "Failed to list files")
+            }
             .getOrNull() ?: emptyList()
 
     suspend fun readFile(path: String): FileContent? =
         runCatching { clientFlow.value?.readFile(path) }
-            .onFailure { Log.w(TAG, "readFile($path) failed", it) }
+            .onFailure {
+                Log.w(TAG, "readFile($path) failed", it)
+                reportActionError(it.message ?: "Failed to open file")
+            }
             .getOrNull()
 
     suspend fun vcsInfo(): VcsInfo? =
         runCatching { clientFlow.value?.vcsInfo() }
-            .onFailure { Log.w(TAG, "vcsInfo failed", it) }
+            .onFailure {
+                Log.w(TAG, "vcsInfo failed", it)
+                reportActionError(it.message ?: "Failed to load VCS info")
+            }
             .getOrNull()
 
     suspend fun vcsStatus(): List<VcsFileStatus> =
         runCatching { clientFlow.value?.vcsStatus() }
-            .onFailure { Log.w(TAG, "vcsStatus failed", it) }
+            .onFailure {
+                Log.w(TAG, "vcsStatus failed", it)
+                reportActionError(it.message ?: "Failed to load VCS status")
+            }
             .getOrNull() ?: emptyList()
 
     suspend fun vcsDiff(mode: String): List<VcsFileDiff> =
         runCatching { clientFlow.value?.vcsDiff(mode) }
-            .onFailure { Log.w(TAG, "vcsDiff($mode) failed", it) }
+            .onFailure {
+                Log.w(TAG, "vcsDiff($mode) failed", it)
+                reportActionError(it.message ?: "Failed to load diff")
+            }
             .getOrNull() ?: emptyList()
 
     suspend fun sessionDiff(sessionId: String): List<VcsFileDiff> =
         runCatching { clientFlow.value?.sessionDiff(sessionId) }
-            .onFailure { Log.w(TAG, "sessionDiff($sessionId) failed", it) }
+            .onFailure {
+                Log.w(TAG, "sessionDiff($sessionId) failed", it)
+                reportActionError(it.message ?: "Failed to load session changes")
+            }
             .getOrNull() ?: emptyList()
 
     // --- Event handling ---

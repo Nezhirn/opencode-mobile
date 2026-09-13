@@ -41,6 +41,10 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
     private val _loading = MutableStateFlow(false)
     val loading = _loading.asStateFlow()
 
+    val actionError = repository.actionError
+
+    fun clearActionError() = repository.clearActionError()
+
     private var sessionId: String? = null
 
     fun load(sessionId: String) {

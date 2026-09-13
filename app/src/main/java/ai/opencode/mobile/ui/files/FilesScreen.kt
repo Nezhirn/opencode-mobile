@@ -74,6 +74,7 @@ fun FilesScreen(
     val currentPath by viewModel.currentPath.collectAsStateWithLifecycle()
     val openedFile by viewModel.openedFile.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
+    val actionError by viewModel.actionError.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) {
         if (sessionId != null) viewModel.load(sessionId) else viewModel.openDirectory("")
@@ -109,6 +110,33 @@ fun FilesScreen(
             TabRow(selectedTabIndex = tab) {
                 tabs.forEachIndexed { index, title ->
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title) })
+                }
+            }
+            actionError?.let { message ->
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(12.dp),
+                        )
+                        IconButton(onClick = { viewModel.clearActionError() }) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "Dismiss",
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                        }
+                    }
                 }
             }
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
