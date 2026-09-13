@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="ai.opencode.mobile.data.remote.PromptRequestSerializationTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-13T02:06:40" hostname="prod" time="0.02">
-  <properties/>
-  <testcase name="textPartAlwaysSerializesItsType" classname="ai.opencode.mobile.data.remote.PromptRequestSerializationTest" time="0.018"/>
-  <testcase name="absentOptionalFieldsAreOmitted" classname="ai.opencode.mobile.data.remote.PromptRequestSerializationTest" time="0.002"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

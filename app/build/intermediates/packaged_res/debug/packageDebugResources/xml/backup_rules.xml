@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Keep connection settings, including the encrypted password, out of backups. -->
-<full-backup-content>
-    <exclude domain="file" path="datastore/" />
-</full-backup-content>
