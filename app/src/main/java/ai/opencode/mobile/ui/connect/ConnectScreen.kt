@@ -48,6 +48,7 @@ fun ConnectScreen(
     val viewModel: ConnectViewModel = viewModel(factory = ConnectViewModel.Factory)
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
+    val saveError by viewModel.saveError.collectAsStateWithLifecycle()
 
     var baseUrl by rememberSaveable { mutableStateOf("") }
     var username by rememberSaveable { mutableStateOf("opencode") }
@@ -155,6 +156,15 @@ fun ConnectScreen(
 
         Spacer(Modifier.height(20.dp))
         ConnectionStatus(connection)
+
+        saveError?.let { message ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = message,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 

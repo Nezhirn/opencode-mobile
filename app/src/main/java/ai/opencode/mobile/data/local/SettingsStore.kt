@@ -1,6 +1,7 @@
 package ai.opencode.mobile.data.local
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -37,12 +38,17 @@ class SettingsStore(private val context: Context) {
     /**
      * Decrypts the stored password. Values that fail to decrypt are treated as
      * legacy plaintext (written before encryption was introduced) and returned
-     * as-is; they get encrypted on the next save.
+     * as-is; they get encrypted on the next save. A versioned value that fails to
+     * decrypt is reported so the user knows to re-enter it.
      */
     private fun readPassword(stored: String?): String {
         val raw = stored.orEmpty()
         if (raw.isEmpty()) return ""
-        return cipher.decrypt(raw) ?: raw
+        cipher.decrypt(raw)?.let { return it }
+        if (raw.startsWith(SecretCipher.PREFIX)) {
+            Log.w(TAG, "Stored password could not be decrypted; re-entry required")
+        }
+        return raw
     }
 
     suspend fun save(settings: ConnectionSettings) {
@@ -64,6 +70,7 @@ class SettingsStore(private val context: Context) {
     }
 
     private companion object {
+        const val TAG = "SettingsStore"
         const val DEFAULT_USERNAME = "opencode"
         val KEY_BASE_URL = stringPreferencesKey("base_url")
         val KEY_USERNAME = stringPreferencesKey("username")

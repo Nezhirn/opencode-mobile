@@ -33,25 +33,30 @@ class SecretCipher {
         return generator.generateKey()
     }
 
+    /**
+     * Encrypts [plainText]. Failures are propagated (rather than swallowed into
+     * an empty string) so the caller can tell the user the password was not
+     * saved instead of silently losing it.
+     */
     fun encrypt(plainText: String): String {
         if (plainText.isEmpty()) return ""
-        return runCatching {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-            val cipherText = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
-            Base64.encodeToString(cipher.iv + cipherText, Base64.NO_WRAP)
-        }.getOrDefault("")
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+        val cipherText = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
+        return PREFIX + Base64.encodeToString(cipher.iv + cipherText, Base64.NO_WRAP)
     }
 
     /**
      * Returns the decrypted value, an empty string for empty input, or null when
-     * the stored value cannot be decrypted (e.g. a legacy plaintext value written
-     * before encryption was introduced). Callers may fall back to the raw value.
+     * the stored value cannot be decrypted. Values written before the versioned
+     * prefix was introduced are still decrypted, so an upgrade does not turn a
+     * stored password into literal ciphertext.
      */
     fun decrypt(encoded: String): String? {
         if (encoded.isEmpty()) return ""
+        val payload = encoded.removePrefix(PREFIX)
         return runCatching {
-            val combined = Base64.decode(encoded, Base64.NO_WRAP)
+            val combined = Base64.decode(payload, Base64.NO_WRAP)
             val iv = combined.copyOfRange(0, IV_LENGTH)
             val cipherText = combined.copyOfRange(IV_LENGTH, combined.size)
             val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -60,11 +65,14 @@ class SecretCipher {
         }.getOrNull()
     }
 
-    private companion object {
-        const val KEYSTORE_PROVIDER = "AndroidKeyStore"
-        const val KEY_ALIAS = "opencode_mobile_connection"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val IV_LENGTH = 12
-        const val GCM_TAG_BITS = 128
+    companion object {
+        /** Marks the storage format; lets callers tell legacy plaintext from a broken secret. */
+        const val PREFIX = "v1:"
+
+        private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
+        private const val KEY_ALIAS = "opencode_mobile_connection"
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val IV_LENGTH = 12
+        private const val GCM_TAG_BITS = 128
     }
 }
