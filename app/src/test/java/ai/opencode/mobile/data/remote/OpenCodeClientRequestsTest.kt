@@ -71,4 +71,34 @@ class OpenCodeClientRequestsTest {
             error.message.orEmpty().contains("Empty response body"),
         )
     }
+
+    @Test
+    fun errorMessageIsNotQuoted() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"message":"boom"}"""))
+
+        val error = runCatching { client().abort("s") }.exceptionOrNull() as? OpenCodeException
+
+        assertEquals("boom", error?.message)
+    }
+
+    @Test
+    fun errorMessageReadsNestedData() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("""{"error":{"name":"ProviderAuthError","data":{"message":"bad key"}}}"""),
+        )
+
+        val error = runCatching { client().abort("s") }.exceptionOrNull() as? OpenCodeException
+
+        assertEquals("bad key", error?.message)
+    }
+
+    @Test
+    fun errorMessageReadsStringError() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":"nope"}"""))
+
+        val error = runCatching { client().abort("s") }.exceptionOrNull() as? OpenCodeException
+
+        assertEquals("nope", error?.message)
+    }
 }

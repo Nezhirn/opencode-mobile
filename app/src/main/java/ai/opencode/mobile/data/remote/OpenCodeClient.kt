@@ -12,6 +12,9 @@ import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import okhttp3.Call
 import okhttp3.Credentials
 import okhttp3.HttpUrl
@@ -170,9 +173,17 @@ class OpenCodeClient(
     private fun extractError(text: String, fallback: String): String {
         if (text.isBlank()) return fallback
         return runCatching {
-            val element = json.parseToJsonElement(text)
-            val obj = element as? kotlinx.serialization.json.JsonObject
-            (obj?.get("message") ?: obj?.get("error"))?.toString() ?: text
+            val obj = json.parseToJsonElement(text) as? JsonObject
+            // opencode nests the reason in several shapes: {message}, {error},
+            // {error:{data:{message}}}, {data:{message}}. Read the text without
+            // JsonElement.toString() so it is not wrapped in quotes.
+            obj?.stringOrNull("message")
+                ?: obj?.stringOrNull("error")
+                ?: (obj?.get("error") as? JsonObject)?.stringOrNull("message")
+                ?: (obj?.get("error") as? JsonObject)?.get("data")
+                    ?.let { it as? JsonObject }?.stringOrNull("message")
+                ?: (obj?.get("data") as? JsonObject)?.stringOrNull("message")
+                ?: text
         }.getOrDefault(text)
     }
 
@@ -339,3 +350,6 @@ class OpenCodeClient(
 }
 
 class OpenCodeException(val code: Int, override val message: String) : IOException(message)
+
+private fun JsonObject.stringOrNull(key: String): String? =
+    (this[key] as? JsonPrimitive)?.contentOrNull
