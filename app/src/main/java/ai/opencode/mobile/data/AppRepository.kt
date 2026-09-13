@@ -11,6 +11,7 @@ import ai.opencode.mobile.data.remote.Message
 import ai.opencode.mobile.data.remote.MessageWithParts
 import ai.opencode.mobile.data.remote.OpenCodeClient
 import ai.opencode.mobile.data.remote.OpenCodeException
+import ai.opencode.mobile.data.remote.OpenCodeJson
 import ai.opencode.mobile.data.remote.Part
 import ai.opencode.mobile.data.remote.PermissionRequest
 import ai.opencode.mobile.data.remote.PromptModel
@@ -48,20 +49,11 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
-
-val AppJson: Json = Json {
-    ignoreUnknownKeys = true
-    isLenient = true
-    explicitNulls = false
-    encodeDefaults = false
-    coerceInputValues = true
-}
 
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState
@@ -496,9 +488,9 @@ class AppRepository(private val settingsStore: SettingsStore) {
             val client = clientFlow.value ?: return@launch
             val sessionId = _chat.value.sessionId ?: return@launch
             val model = _selectedModel.value
-            if (model == null) {
-                // Sending without a model is rejected by the server, so surface a
-                // clear message instead of a cryptic session.error.
+            if (model == null || model.providerID.isBlank() || model.modelID.isBlank()) {
+                // Sending without a valid model is rejected by the server, so
+                // surface a clear message instead of a cryptic session.error.
                 _chat.update { state ->
                     state.copy(error = "No model available. Pick a model or configure a provider.")
                 }
@@ -802,7 +794,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
             "todo.updated" -> {
                 if (appliesToCurrentChat(props)) {
                     val todos = props["todos"]?.let {
-                        runCatching { AppJson.decodeFromJsonElement(TODO_LIST_SERIALIZER, it) }.getOrNull()
+                        runCatching { OpenCodeJson.decodeFromJsonElement(TODO_LIST_SERIALIZER, it) }.getOrNull()
                     } ?: return
                     _chat.update { state -> state.copy(todos = todos) }
                 }
@@ -863,17 +855,17 @@ private fun JsonObject.stringOrNull(key: String): String? =
     (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
 
 private fun JsonObject.decodeSession(key: String): Session? =
-    this[key]?.let { runCatching { AppJson.decodeFromJsonElement(Session.serializer(), it) }.getOrNull() }
+    this[key]?.let { runCatching { OpenCodeJson.decodeFromJsonElement(Session.serializer(), it) }.getOrNull() }
 
 private fun JsonObject.decodeMessage(key: String): Message? =
-    this[key]?.let { runCatching { AppJson.decodeFromJsonElement(Message.serializer(), it) }.getOrNull() }
+    this[key]?.let { runCatching { OpenCodeJson.decodeFromJsonElement(Message.serializer(), it) }.getOrNull() }
 
 private fun JsonObject.decodePart(key: String): Part? =
-    this[key]?.let { runCatching { AppJson.decodeFromJsonElement(Part.serializer(), it) }.getOrNull() }
+    this[key]?.let { runCatching { OpenCodeJson.decodeFromJsonElement(Part.serializer(), it) }.getOrNull() }
 
 private fun JsonObject.decodeSessionError(): SessionErrorInfo? =
     this["error"]?.let {
-        runCatching { AppJson.decodeFromJsonElement(SessionErrorInfo.serializer(), it) }.getOrNull()
+        runCatching { OpenCodeJson.decodeFromJsonElement(SessionErrorInfo.serializer(), it) }.getOrNull()
     }
 
 /**
@@ -907,15 +899,20 @@ internal fun resolveDefaultModel(providers: ProviderList): PromptModel? {
     val providersById = providers.all.associateBy { it.id }
     val candidates = providers.connected.ifEmpty { providers.all.map { it.id } }
     candidates.forEach { providerId ->
-        val modelId = providersById[providerId]?.models?.keys?.firstOrNull()
-        if (!modelId.isNullOrBlank()) return PromptModel(providerId, modelId)
+        val modelId = providersById[providerId]?.firstModelId() ?: return@forEach
+        return PromptModel(providerId, modelId)
     }
 
-    providers.all.firstOrNull { it.models.isNotEmpty() }?.let { provider ->
-        provider.models.keys.firstOrNull()?.let { return PromptModel(provider.id, it) }
+    providers.all.forEach { provider ->
+        provider.firstModelId()?.let { return PromptModel(provider.id, it) }
     }
     return null
 }
+
+/** First non-blank model id of a provider, from the map key or the model itself. */
+private fun Provider.firstModelId(): String? =
+    models.keys.firstOrNull { it.isNotBlank() }
+        ?: models.values.firstOrNull { it.id.isNotBlank() }?.id
 
 private fun MessageWithParts.toUi(): ChatMessageUi = ChatMessageUi(info = info, parts = parts)
 

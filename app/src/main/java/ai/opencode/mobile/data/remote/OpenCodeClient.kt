@@ -51,13 +51,7 @@ class OpenCodeClient(
 ) {
     val baseUrl: String = normalizeBaseUrl(baseUrl)
 
-    private val json: Json = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-        explicitNulls = false
-        encodeDefaults = false
-        coerceInputValues = true
-    }
+    private val json: Json = OpenCodeJson
 
     // Settings changes recreate OpenCodeClient; sharing the OkHttpClient keeps a
     // single connection pool and dispatcher instead of leaking one per instance.
@@ -192,12 +186,6 @@ class OpenCodeClient(
             ListSerializer(MessageWithParts.serializer()),
         )
 
-    suspend fun prompt(sessionId: String, request: PromptRequest): PromptResponse =
-        execute(
-            newRequest("POST", "/session/$sessionId/message", body = jsonBody(request)),
-            PromptResponse.serializer(),
-        )
-
     suspend fun promptAsync(sessionId: String, request: PromptRequest) =
         executeUnit("POST", "/session/$sessionId/prompt_async", body = jsonBody(request))
 
@@ -314,34 +302,33 @@ class OpenCodeClient(
         private val EMPTY_BODY: RequestBody = ByteArray(0).toRequestBody(null, 0, 0)
         private val METHODS_REQUIRING_BODY = setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
 
-        private val sharedClient: OkHttpClient by lazy { buildBaseClient(insecure = false) }
-        private val insecureClient: OkHttpClient by lazy { buildBaseClient(insecure = true) }
+        private val sharedClient: OkHttpClient by lazy { buildBaseClient(insecure = false, logging = true, readTimeoutSeconds = API_READ_TIMEOUT_SECONDS) }
+        private val insecureClient: OkHttpClient by lazy { buildBaseClient(insecure = true, logging = true, readTimeoutSeconds = API_READ_TIMEOUT_SECONDS) }
 
-        // SSE streams stay open indefinitely, so they need an unlimited read
-        // timeout; newBuilder shares the pool/dispatcher with the base client.
-        private val sseClient: OkHttpClient by lazy {
-            sharedClient.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build()
-        }
-        private val insecureSseClient: OkHttpClient by lazy {
-            insecureClient.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build()
-        }
+        // SSE streams must NOT use BODY logging: HttpLoggingInterceptor reads the
+        // whole response body (source.request(Long.MAX_VALUE)) before returning,
+        // which on an endless event stream blocks every event from being
+        // delivered. They also need no read timeout, since they stay open.
+        private val sseClient: OkHttpClient by lazy { buildBaseClient(insecure = false, logging = false, readTimeoutSeconds = 0L) }
+        private val insecureSseClient: OkHttpClient by lazy { buildBaseClient(insecure = true, logging = false, readTimeoutSeconds = 0L) }
 
         private const val API_READ_TIMEOUT_SECONDS = 120L
 
         /**
-         * Builds the shared OkHttp client. When [insecure] is set, TLS certificate
-         * and hostname verification are disabled so servers using self-signed
+         * Builds an OkHttp client. When [insecure] is set, TLS certificate and
+         * hostname verification are disabled so servers using self-signed
          * certificates (common for local development) can be reached. This weakens
-         * transport security and is an explicit, opt-in user choice.
+         * transport security and is an explicit, opt-in user choice. [logging] is
+         * enabled for regular API calls only, never for the event stream.
          */
         @SuppressLint("CustomX509TrustManager")
-        private fun buildBaseClient(insecure: Boolean): OkHttpClient {
+        private fun buildBaseClient(insecure: Boolean, logging: Boolean, readTimeoutSeconds: Long): OkHttpClient {
             val builder = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(API_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
-            if (BuildConfig.DEBUG) {
+            if (logging && BuildConfig.DEBUG) {
                 // BODY logging is development-only; credentials are redacted and
                 // it is never registered in release builds.
                 builder.addInterceptor(
