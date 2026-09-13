@@ -164,6 +164,35 @@ class AppRepositoryEventsTest {
     }
 
     @Test
+    fun staleLoadDoesNotOverwriteNewerSession() {
+        val newSession = ChatState(sessionId = "ses_new", loading = true)
+        val message = ChatMessageUi(
+            info = Message(id = "msg_1", sessionID = "ses_old", role = "assistant"),
+            parts = emptyList(),
+        )
+
+        val result = newSession.withMessagesIfCurrent("ses_old", listOf(message))
+
+        assertEquals("ses_new", result.sessionId)
+        assertTrue(result.messages.isEmpty())
+        assertTrue(result.loading)
+    }
+
+    @Test
+    fun matchingLoadAppliesMessages() {
+        val state = ChatState(sessionId = "ses_1", loading = true)
+        val message = ChatMessageUi(
+            info = Message(id = "msg_1", sessionID = "ses_1", role = "assistant"),
+            parts = emptyList(),
+        )
+
+        val result = state.withMessagesIfCurrent("ses_1", listOf(message))
+
+        assertEquals(1, result.messages.size)
+        assertFalse(result.loading)
+    }
+
+    @Test
     fun streamedDeltaIsAppended() = runBlocking {
         val repository = repository()
         repository.setChatForTest(

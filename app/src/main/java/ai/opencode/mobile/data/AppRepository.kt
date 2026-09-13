@@ -467,23 +467,15 @@ class AppRepository(private val settingsStore: SettingsSource) {
     private suspend fun loadChat(client: OpenCodeClient, sessionId: String) {
         runCatching { client.getMessages(sessionId) }
             .onSuccess { messages ->
-                _chat.update { state ->
-                    if (state.sessionId != sessionId) state
-                    else state.copy(messages = messages.map { it.toUi() }, loading = false)
-                }
+                _chat.update { state -> state.withMessagesIfCurrent(sessionId, messages.map { it.toUi() }) }
             }
             .onFailure { error ->
                 Log.w(TAG, "loadChat($sessionId) messages failed", error)
-                _chat.update { state ->
-                    if (state.sessionId != sessionId) state
-                    else state.copy(loading = false, error = error.message)
-                }
+                _chat.update { state -> state.withLoadErrorIfCurrent(sessionId, error.message) }
             }
         runCatching { client.todos(sessionId) }
             .onSuccess { todos ->
-                _chat.update { state ->
-                    if (state.sessionId != sessionId) state else state.copy(todos = todos)
-                }
+                _chat.update { state -> state.withTodosIfCurrent(sessionId, todos) }
             }
             .onFailure { Log.w(TAG, "loadChat($sessionId) todos failed", it) }
     }
@@ -953,8 +945,21 @@ internal fun ChatState.upsertPart(part: Part): ChatState {
     return copy(messages = messages.toMutableList().also { it[messageIndex] = message.copy(parts = parts) })
 }
 
-internal fun ChatState.applyDelta(partId: String, field: String, delta: String): ChatState {
-    val messageIndex = messages.indexOfFirst { m -> m.parts.any { it.id == partId } }
+/**
+ * Guards against stale loads: results only apply when the chat still belongs to
+ * [sessionId]. Prevents a slow previous session from overwriting a newly opened
+ * one.
+ */
+internal fun ChatState.withMessagesIfCurrent(sessionId: String, messages: List<ChatMessageUi>): ChatState =
+    if (this.sessionId != sessionId) this else copy(messages = messages, loading = false)
+
+internal fun ChatState.withLoadErrorIfCurrent(sessionId: String, message: String?): ChatState =
+    if (this.sessionId != sessionId) this else copy(loading = false, error = message)
+
+internal fun ChatState.withTodosIfCurrent(sessionId: String, todos: List<Todo>): ChatState =
+    if (this.sessionId != sessionId) this else copy(todos = todos)
+
+internal fun ChatState.applyDelta(partId: String, field: String, delta: String): ChatState {    val messageIndex = messages.indexOfFirst { m -> m.parts.any { it.id == partId } }
     if (messageIndex < 0) return this
     val message = messages[messageIndex]
     val partIndex = message.parts.indexOfFirst { it.id == partId }
