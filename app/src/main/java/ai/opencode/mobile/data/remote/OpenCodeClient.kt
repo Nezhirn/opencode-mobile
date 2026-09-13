@@ -59,45 +59,9 @@ class OpenCodeClient(
         coerceInputValues = true
     }
 
-    private val client: OkHttpClient = buildClient(allowInsecureTls)
-
-    /**
-     * Builds the OkHttp client. When [allowInsecureTls] is set, TLS certificate
-     * and hostname verification are disabled so servers using self-signed
-     * certificates (common for local development) can be reached. This weakens
-     * transport security and is an explicit, opt-in user choice.
-     */
-    @SuppressLint("CustomX509TrustManager")
-    private fun buildClient(allowInsecureTls: Boolean): OkHttpClient {
-        val builder = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .retryOnConnectionFailure(true)
-        if (BuildConfig.DEBUG) {
-            // BODY logging is development-only; credentials are redacted and it
-            // is never registered in release builds.
-            builder.addInterceptor(
-                HttpLoggingInterceptor { message -> Log.d(TAG, message) }.apply {
-                    level = HttpLoggingInterceptor.Level.BODY
-                    redactHeader("Authorization")
-                },
-            )
-        }
-        if (allowInsecureTls) {
-            val trustManager = object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
-                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-            }
-            val sslContext = SSLContext.getInstance("TLS").apply {
-                init(null, arrayOf(trustManager), SecureRandom())
-            }
-            builder.sslSocketFactory(sslContext.socketFactory, trustManager)
-            builder.hostnameVerifier { _, _ -> true }
-        }
-        return builder.build()
-    }
+    // Settings changes recreate OpenCodeClient; sharing the OkHttpClient keeps a
+    // single connection pool and dispatcher instead of leaking one per instance.
+    private val client: OkHttpClient = if (allowInsecureTls) insecureClient else sharedClient
 
     private val authHeader: String? =
         if (!username.isNullOrBlank() && password != null) {
@@ -347,6 +311,47 @@ class OpenCodeClient(
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val EMPTY_BODY: RequestBody = ByteArray(0).toRequestBody(null, 0, 0)
         private val METHODS_REQUIRING_BODY = setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
+
+        private val sharedClient: OkHttpClient by lazy { buildBaseClient(insecure = false) }
+        private val insecureClient: OkHttpClient by lazy { buildBaseClient(insecure = true) }
+
+        /**
+         * Builds the shared OkHttp client. When [insecure] is set, TLS certificate
+         * and hostname verification are disabled so servers using self-signed
+         * certificates (common for local development) can be reached. This weakens
+         * transport security and is an explicit, opt-in user choice.
+         */
+        @SuppressLint("CustomX509TrustManager")
+        private fun buildBaseClient(insecure: Boolean): OkHttpClient {
+            val builder = OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .retryOnConnectionFailure(true)
+            if (BuildConfig.DEBUG) {
+                // BODY logging is development-only; credentials are redacted and
+                // it is never registered in release builds.
+                builder.addInterceptor(
+                    HttpLoggingInterceptor { message -> Log.d(TAG, message) }.apply {
+                        level = HttpLoggingInterceptor.Level.BODY
+                        redactHeader("Authorization")
+                    },
+                )
+            }
+            if (insecure) {
+                val trustManager = object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+                }
+                val sslContext = SSLContext.getInstance("TLS").apply {
+                    init(null, arrayOf(trustManager), SecureRandom())
+                }
+                builder.sslSocketFactory(sslContext.socketFactory, trustManager)
+                builder.hostnameVerifier { _, _ -> true }
+            }
+            return builder.build()
+        }
 
         fun normalizeBaseUrl(input: String): String {
             var value = input.trim()
