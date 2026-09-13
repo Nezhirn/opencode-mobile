@@ -100,7 +100,7 @@ class OpenCodeClient(
         request: Request,
         deserializer: DeserializationStrategy<T>,
     ): T = withContext(Dispatchers.IO) {
-        client.newCall(request).apply { timeout(requestTimeoutMillis(request)) }.execute().use { response ->
+        client.newCall(request).apply { applyTimeout(requestTimeoutMillis(request)) }.execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw OpenCodeException(response.code, extractError(text, response.message))
@@ -125,7 +125,7 @@ class OpenCodeClient(
         body: RequestBody? = null,
     ): Unit = withContext(Dispatchers.IO) {
         val request = newRequest(method, path, query, body)
-        client.newCall(request).apply { timeout(requestTimeoutMillis(request)) }.execute().use { response ->
+        client.newCall(request).apply { applyTimeout(requestTimeoutMillis(request)) }.execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw OpenCodeException(response.code, extractError(text, response.message))
@@ -274,7 +274,8 @@ class OpenCodeClient(
      */
     fun events(): Flow<EventEnvelope> = callbackFlow {
         val request = newRequest("GET", "/event", accept = "text/event-stream")
-        val factory = EventSources.createFactory(client)
+        val eventClient = if (allowInsecureTls) insecureSseClient else sseClient
+        val factory = EventSources.createFactory(eventClient)
         val listener = object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 runCatching { json.decodeFromString<EventEnvelope>(data) }
@@ -302,7 +303,8 @@ class OpenCodeClient(
         // never apply backpressure that would discard them.
         .buffer(Channel.UNLIMITED)
 
-    private fun Call.timeout(millis: Long) {
+    /** Applies a per-call timeout without shadowing [Call.timeout]. */
+    private fun Call.applyTimeout(millis: Long) {
         timeout().timeout(if (millis == 0L) 0 else millis, TimeUnit.MILLISECONDS)
     }
 
@@ -315,6 +317,17 @@ class OpenCodeClient(
         private val sharedClient: OkHttpClient by lazy { buildBaseClient(insecure = false) }
         private val insecureClient: OkHttpClient by lazy { buildBaseClient(insecure = true) }
 
+        // SSE streams stay open indefinitely, so they need an unlimited read
+        // timeout; newBuilder shares the pool/dispatcher with the base client.
+        private val sseClient: OkHttpClient by lazy {
+            sharedClient.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build()
+        }
+        private val insecureSseClient: OkHttpClient by lazy {
+            insecureClient.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build()
+        }
+
+        private const val API_READ_TIMEOUT_SECONDS = 120L
+
         /**
          * Builds the shared OkHttp client. When [insecure] is set, TLS certificate
          * and hostname verification are disabled so servers using self-signed
@@ -326,7 +339,7 @@ class OpenCodeClient(
             val builder = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .readTimeout(API_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
             if (BuildConfig.DEBUG) {
                 // BODY logging is development-only; credentials are redacted and
