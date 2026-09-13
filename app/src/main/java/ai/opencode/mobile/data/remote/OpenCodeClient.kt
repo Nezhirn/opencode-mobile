@@ -120,7 +120,10 @@ class OpenCodeClient(
         val builder = Request.Builder().url(url(path, query))
         authHeader?.let { builder.header("Authorization", it) }
         accept?.let { builder.header("Accept", it) }
-        builder.method(method, body)
+        // OkHttp rejects methods that require a body when none is supplied
+        // (POST/PUT/PATCH/...), so send an explicit empty body instead.
+        val effectiveBody = body ?: if (method in METHODS_REQUIRING_BODY) EMPTY_BODY else null
+        builder.method(method, effectiveBody)
         return builder.build()
     }
 
@@ -317,6 +320,8 @@ class OpenCodeClient(
     companion object {
         private const val TAG = "OpenCodeClient"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val EMPTY_BODY: RequestBody = ByteArray(0).toRequestBody(null, 0, 0)
+        private val METHODS_REQUIRING_BODY = setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
 
         fun normalizeBaseUrl(input: String): String {
             var value = input.trim()
