@@ -278,8 +278,9 @@ private fun MessageItem(message: ChatMessageUi) {
         ) {
             message.parts.forEach { part -> AssistantPart(part) }
             message.info.error?.let { error ->
+                val errorText = remember(error) { error.toString() }
                 Text(
-                    text = error.toString(),
+                    text = errorText,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -417,7 +418,7 @@ private fun ToolCard(part: Part) {
             if (expanded) {
                 Spacer(Modifier.height(8.dp))
                 state?.input?.let { input ->
-                    MonoBlock(title = "input", text = input.toString())
+                    MonoBlock(title = "input", text = remember(input) { input.toString() })
                 }
                 state?.output?.let { output ->
                     MonoBlock(title = "output", text = output)

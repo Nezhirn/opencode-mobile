@@ -198,10 +198,12 @@ private fun SessionRow(session: Session, onClick: () -> Unit, onDelete: () -> Un
             )
             Spacer(Modifier.height(2.dp))
             val updated = session.time?.updated ?: 0
-            val relative = if (updated > 0) {
-                DateUtils.getRelativeTimeSpanString(updated, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
-            } else {
-                session.directory
+            val relative = remember(updated, session.directory) {
+                if (updated > 0) {
+                    DateUtils.getRelativeTimeSpanString(updated, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
+                } else {
+                    session.directory
+                }
             }
             Text(
                 text = relative,
