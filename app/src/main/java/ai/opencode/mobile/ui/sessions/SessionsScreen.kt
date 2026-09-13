@@ -13,15 +13,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -34,6 +37,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -57,10 +61,16 @@ fun SessionsScreen(
     val permissions by viewModel.permissions.collectAsStateWithLifecycle()
     val questions by viewModel.questions.collectAsStateWithLifecycle()
     val search by viewModel.search.collectAsStateWithLifecycle()
+    val creating by viewModel.creatingSession.collectAsStateWithLifecycle()
+    val sessionError by viewModel.sessionError.collectAsStateWithLifecycle()
 
     val filtered = remember(sessions, search) {
         if (search.isBlank()) sessions
         else sessions.filter { it.title.contains(search, ignoreCase = true) }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.navigation.collect { sessionId -> onOpenSession(sessionId) }
     }
 
     Scaffold(
@@ -81,8 +91,14 @@ fun SessionsScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { viewModel.createSession() }) {
-                Icon(Icons.Filled.Add, contentDescription = "New session")
+            if (creating) {
+                FloatingActionButton(onClick = {}) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                }
+            } else {
+                FloatingActionButton(onClick = { viewModel.createSession() }) {
+                    Icon(Icons.Filled.Add, contentDescription = "New session")
+                }
             }
         },
     ) { padding ->
@@ -107,6 +123,15 @@ fun SessionsScreen(
                 )
 
                 is ConnectionState.Connected -> Unit
+            }
+
+            sessionError?.let { message ->
+                Banner(
+                    text = message,
+                    container = MaterialTheme.colorScheme.errorContainer,
+                    content = MaterialTheme.colorScheme.onErrorContainer,
+                    onDismiss = viewModel::clearSessionError,
+                )
             }
 
             if (permissions.isNotEmpty() || questions.isNotEmpty()) {
@@ -194,7 +219,12 @@ private fun SessionRow(session: Session, onClick: () -> Unit, onDelete: () -> Un
 }
 
 @Composable
-private fun Banner(text: String, container: androidx.compose.ui.graphics.Color, content: androidx.compose.ui.graphics.Color) {
+private fun Banner(
+    text: String,
+    container: androidx.compose.ui.graphics.Color,
+    content: androidx.compose.ui.graphics.Color,
+    onDismiss: (() -> Unit)? = null,
+) {
     Surface(
         color = container,
         shape = MaterialTheme.shapes.small,
@@ -202,11 +232,20 @@ private fun Banner(text: String, container: androidx.compose.ui.graphics.Color, 
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
     ) {
-        Text(
-            text = text,
-            color = content,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(12.dp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = text,
+                color = content,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(12.dp),
+            )
+            if (onDismiss != null) {
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = content)
+                }
+            }
+        }
     }
 }

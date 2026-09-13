@@ -29,13 +29,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -127,6 +130,19 @@ class AppRepository(private val settingsStore: SettingsStore) {
 
     private val _chat = MutableStateFlow(ChatState())
     val chat: StateFlow<ChatState> = _chat.asStateFlow()
+
+    private val _creatingSession = MutableStateFlow(false)
+    val creatingSession: StateFlow<Boolean> = _creatingSession.asStateFlow()
+
+    private val _sessionError = MutableStateFlow<String?>(null)
+    val sessionError: StateFlow<String?> = _sessionError.asStateFlow()
+
+    /**
+     * One-shot navigation requests (session id to open). A Channel is used instead
+     * of a StateFlow so returning to the sessions list does not re-trigger it.
+     */
+    private val _navigation = Channel<String>(Channel.BUFFERED)
+    val navigation: Flow<String> = _navigation.receiveAsFlow()
 
     init {
         scope.launch {
@@ -235,15 +251,31 @@ class AppRepository(private val settingsStore: SettingsStore) {
     // --- Session actions ---
 
     fun createSession(title: String? = null) {
+        // Ignore re-entrant taps while a create request is in flight.
+        if (_creatingSession.value) return
+        _creatingSession.value = true
+        _sessionError.value = null
         scope.launch {
-            val client = clientFlow.value ?: return@launch
+            val client = clientFlow.value
+            if (client == null) {
+                _creatingSession.value = false
+                return@launch
+            }
             runCatching { client.createSession(CreateSessionRequest(title = title)) }
-                .onSuccess { loadSessions(client) }
+                .onSuccess { session ->
+                    loadSessions(client)
+                    _navigation.send(session.id)
+                }
                 .onFailure {
                     Log.w(TAG, "createSession failed", it)
-                    _connection.value = ConnectionState.Error(it.message ?: "Failed to create session")
+                    _sessionError.value = it.message ?: "Failed to create session"
                 }
+            _creatingSession.value = false
         }
+    }
+
+    fun clearSessionError() {
+        _sessionError.value = null
     }
 
     fun deleteSession(sessionId: String) {

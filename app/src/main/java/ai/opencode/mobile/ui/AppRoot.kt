@@ -32,9 +32,15 @@ fun AppRoot() {
     NavHost(navController = navController, startDestination = "sessions") {
         composable("sessions") {
             SessionsScreen(
-                onOpenSession = { sessionId -> navController.navigate("chat/$sessionId") },
-                onOpenFiles = { navController.navigate("files") },
-                onOpenSettings = { navController.navigate("settings") },
+                onOpenSession = { sessionId ->
+                    navController.navigate("chat/$sessionId") { launchSingleTop = true }
+                },
+                onOpenFiles = {
+                    navController.navigate("files") { launchSingleTop = true }
+                },
+                onOpenSettings = {
+                    navController.navigate("settings") { launchSingleTop = true }
+                },
             )
         }
 
@@ -46,7 +52,9 @@ fun AppRoot() {
             ChatScreen(
                 sessionId = sessionId,
                 onBack = { navController.popBackStack() },
-                onOpenFiles = { id -> navController.navigate("files/$id") },
+                onOpenFiles = { id ->
+                    navController.navigate("files/$id") { launchSingleTop = true }
+                },
             )
         }
 

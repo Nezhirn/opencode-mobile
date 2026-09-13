@@ -17,6 +17,9 @@ class SessionsViewModel(private val repository: AppRepository) : ViewModel() {
     val connection = repository.connection
     val permissions = repository.permissions
     val questions = repository.questions
+    val creatingSession = repository.creatingSession
+    val sessionError = repository.sessionError
+    val navigation = repository.navigation
 
     private val _search = MutableStateFlow("")
     val search = _search.asStateFlow()
@@ -28,6 +31,8 @@ class SessionsViewModel(private val repository: AppRepository) : ViewModel() {
     fun refresh() = repository.refresh()
 
     fun createSession() = repository.createSession()
+
+    fun clearSessionError() = repository.clearSessionError()
 
     fun deleteSession(sessionId: String) = repository.deleteSession(sessionId)
 
