@@ -35,11 +35,6 @@ class ChatViewModel(private val repository: AppRepository) : ViewModel() {
         repository.openChat(id)
     }
 
-    fun close() {
-        sessionId.value = null
-        repository.closeChat()
-    }
-
     override fun onCleared() {
         // Release the shared chat state when leaving the screen so events stop
         // being processed for a session that is no longer visible. Guard by id so

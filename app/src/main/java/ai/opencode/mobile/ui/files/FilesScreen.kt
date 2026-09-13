@@ -1,5 +1,6 @@
 package ai.opencode.mobile.ui.files
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.remote.FileContent
 import ai.opencode.mobile.data.remote.FileNode
 import ai.opencode.mobile.data.remote.VcsFileDiff
@@ -7,7 +8,6 @@ import ai.opencode.mobile.data.remote.VcsFileStatus
 import ai.opencode.mobile.ui.components.TruncatedText
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -82,15 +83,19 @@ fun FilesScreen(
     }
 
     var tab by remember { mutableIntStateOf(if (sessionId != null) 0 else 1) }
-    val tabs = listOf("Changes", "Files", "VCS")
+    val tabs = listOf(
+        stringResource(R.string.files_tab_changes),
+        stringResource(R.string.files_tab_files),
+        stringResource(R.string.files_tab_vcs),
+    )
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Files & Changes") },
+                title = { Text(stringResource(R.string.files_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_back))
                     }
                 },
                 actions = {
@@ -101,7 +106,7 @@ fun FilesScreen(
                             else -> viewModel.openDirectory(currentPath)
                         }
                     }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                        Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.sessions_refresh))
                     }
                 },
             )
@@ -133,7 +138,7 @@ fun FilesScreen(
                         IconButton(onClick = { viewModel.clearActionError() }) {
                             Icon(
                                 Icons.Filled.Close,
-                                contentDescription = "Dismiss",
+                                contentDescription = stringResource(R.string.action_dismiss),
                                 tint = MaterialTheme.colorScheme.onErrorContainer,
                             )
                         }
@@ -145,7 +150,7 @@ fun FilesScreen(
                     0 -> DiffList(
                         diffs = sessionDiff,
                         loading = loading,
-                        emptyText = "No changes in this session",
+                        emptyText = stringResource(R.string.files_no_changes),
                     )
 
                     1 -> FileBrowser(
@@ -246,7 +251,7 @@ private fun FileBrowser(
         ) {
             if (currentPath.isNotBlank()) {
                 IconButton(onClick = { onOpenDirectory(currentPath.substringBeforeLast('/', "")) }) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Up")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.files_up))
                 }
             }
             Text(
@@ -258,7 +263,7 @@ private fun FileBrowser(
             )
         }
         if (list.isEmpty()) {
-            EmptyState("Empty directory")
+            EmptyState(stringResource(R.string.files_empty_dir))
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 itemsIndexed(list, key = { index, node -> "$index:${node.path}" }) { _, node ->
@@ -303,15 +308,15 @@ private fun VcsView(branch: String?, status: List<VcsFileStatus>, diffs: List<Vc
     Column(modifier = Modifier.fillMaxSize()) {
         if (branch != null) {
             Text(
-                text = "On branch $branch",
+                text = stringResource(R.string.files_on_branch, branch),
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(12.dp),
             )
         }
         if (display.isEmpty()) {
-            EmptyState("Working tree clean")
+            EmptyState(stringResource(R.string.files_clean_tree))
         } else {
-            DiffList(diffs = display, loading = false, emptyText = "Working tree clean")
+            DiffList(diffs = display, loading = false, emptyText = stringResource(R.string.files_clean_tree))
         }
     }
 }
@@ -339,16 +344,16 @@ private fun FileViewerDialog(file: FileContent, onClose: () -> Unit) {
                     Icon(Icons.Filled.Description, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "File",
+                        text = stringResource(R.string.files_file),
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(onClick = onClose) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close")
+                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.files_close))
                     }
                 }
                 HorizontalDivider()
-                val text = if (file.type == "binary") "(binary file)" else file.content
+                val text = if (file.type == "binary") stringResource(R.string.files_binary) else file.content
                 TruncatedText(
                     text = text,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),

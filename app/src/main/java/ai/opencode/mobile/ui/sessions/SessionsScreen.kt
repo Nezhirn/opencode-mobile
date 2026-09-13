@@ -1,10 +1,10 @@
 package ai.opencode.mobile.ui.sessions
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ConnectionState
 import ai.opencode.mobile.data.remote.Session
 import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,16 +77,16 @@ fun SessionsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Sessions") },
+                title = { Text(stringResource(R.string.sessions_title)) },
                 actions = {
                     IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                        Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.sessions_refresh))
                     }
                     IconButton(onClick = onOpenFiles) {
-                        Icon(Icons.Filled.Folder, contentDescription = "Files and changes")
+                        Icon(Icons.Filled.Folder, contentDescription = stringResource(R.string.sessions_open_files))
                     }
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Connection settings")
+                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.sessions_settings))
                     }
                 },
             )
@@ -97,7 +98,7 @@ fun SessionsScreen(
                 }
             } else {
                 FloatingActionButton(onClick = { viewModel.createSession() }) {
-                    Icon(Icons.Filled.Add, contentDescription = "New session")
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.sessions_new))
                 }
             }
         },
@@ -111,13 +112,13 @@ fun SessionsScreen(
                 )
 
                 ConnectionState.Connecting -> Banner(
-                    text = "Connecting…",
+                    text = stringResource(R.string.connect_connecting),
                     container = MaterialTheme.colorScheme.surfaceVariant,
                     content = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 ConnectionState.Disconnected -> Banner(
-                    text = "Not connected",
+                    text = stringResource(R.string.connect_not_connected),
                     container = MaterialTheme.colorScheme.surfaceVariant,
                     content = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -137,9 +138,13 @@ fun SessionsScreen(
             if (permissions.isNotEmpty() || questions.isNotEmpty()) {
                 Banner(
                     text = buildString {
-                        if (permissions.isNotEmpty()) append("${permissions.size} pending permission(s)")
+                        if (permissions.isNotEmpty()) {
+                            append(stringResource(R.string.sessions_pending_permissions, permissions.size))
+                        }
                         if (permissions.isNotEmpty() && questions.isNotEmpty()) append(" · ")
-                        if (questions.isNotEmpty()) append("${questions.size} question(s)")
+                        if (questions.isNotEmpty()) {
+                            append(stringResource(R.string.sessions_pending_questions, questions.size))
+                        }
                     },
                     container = MaterialTheme.colorScheme.primaryContainer,
                     content = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -149,7 +154,7 @@ fun SessionsScreen(
             OutlinedTextField(
                 value = search,
                 onValueChange = viewModel::onSearchChange,
-                placeholder = { Text("Search sessions") },
+                placeholder = { Text(stringResource(R.string.sessions_search)) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -159,7 +164,7 @@ fun SessionsScreen(
             if (filtered.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        "No sessions yet. Tap + to start one.",
+                        stringResource(R.string.sessions_empty),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -215,7 +220,7 @@ private fun SessionRow(session: Session, onClick: () -> Unit, onDelete: () -> Un
         }
         Spacer(Modifier.width(8.dp))
         IconButton(onClick = onDelete) {
-            Icon(Icons.Filled.Delete, contentDescription = "Delete session")
+            Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.sessions_delete))
         }
     }
 }
@@ -245,7 +250,7 @@ private fun Banner(
             )
             if (onDismiss != null) {
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = content)
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_dismiss), tint = content)
                 }
             }
         }

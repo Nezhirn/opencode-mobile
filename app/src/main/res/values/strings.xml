@@ -1,4 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenCode</string>
+
+    <!-- Connect -->
+    <string name="connect_subtitle">Connect to a running opencode server</string>
+    <string name="connect_server_url">Server URL</string>
+    <string name="connect_server_url_hint">http://192.168.1.10:4096</string>
+    <string name="connect_username">Username</string>
+    <string name="connect_password">Password</string>
+    <string name="connect_insecure_tls">Allow insecure TLS</string>
+    <string name="connect_insecure_tls_warning">Trust self-signed certificates. Security risk — enable only for your own local HTTPS server.</string>
+    <string name="connect_connect">Connect</string>
+    <string name="connect_connecting">Connecting…</string>
+    <string name="connect_connected">Connected</string>
+    <string name="connect_connected_version">Connected · opencode %1$s</string>
+    <string name="connect_not_connected">Not connected</string>
+
+    <!-- Sessions -->
+    <string name="sessions_title">Sessions</string>
+    <string name="sessions_refresh">Refresh</string>
+    <string name="sessions_open_files">Files and changes</string>
+    <string name="sessions_settings">Connection settings</string>
+    <string name="sessions_new">New session</string>
+    <string name="sessions_search">Search sessions</string>
+    <string name="sessions_empty">No sessions yet. Tap + to start one.</string>
+    <string name="sessions_delete">Delete session</string>
+    <string name="sessions_pending_permissions">%1$d pending permission(s)</string>
+    <string name="sessions_pending_questions">%1$d question(s)</string>
+    <string name="action_dismiss">Dismiss</string>
+
+    <!-- Chat -->
+    <string name="chat_title">Chat</string>
+    <string name="chat_default_model">default model</string>
+    <string name="chat_model_subtitle">%1$s/%2$s</string>
+    <string name="chat_back">Back</string>
+    <string name="chat_model_and_agent">Model and agent</string>
+    <string name="chat_input_hint">Message opencode</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_stop">Stop</string>
+    <string name="chat_thinking">Thinking</string>
+    <string name="chat_retrying">Retrying (attempt %1$d)…</string>
+    <string name="chat_context_compacted">context compacted</string>
+    <string name="chat_step">step</string>
+    <string name="chat_subtask">Subtask: %1$s</string>
+    <string name="chat_agent">Agent: %1$s</string>
+    <string name="chat_permission">Permission: %1$s</string>
+    <string name="chat_allow_once">Allow once</string>
+    <string name="chat_question">Question</string>
+    <string name="chat_custom_answer">Custom answer</string>
+    <string name="chat_always">Always</string>
+    <string name="chat_reject">Reject</string>
+    <string name="chat_changed_files">Changed: %1$s</string>
+
+    <!-- Model sheet -->
+    <string name="models_title">Model</string>
+    <string name="models_search">Search models</string>
+    <string name="agents_title">Agent</string>
+    <string name="agents_default">Default</string>
+
+    <!-- Files -->
+    <string name="files_title">Files &amp; Changes</string>
+    <string name="files_tab_changes">Changes</string>
+    <string name="files_tab_files">Files</string>
+    <string name="files_tab_vcs">VCS</string>
+    <string name="files_no_changes">No changes in this session</string>
+    <string name="files_empty_dir">Empty directory</string>
+    <string name="files_clean_tree">Working tree clean</string>
+    <string name="files_on_branch">On branch %1$s</string>
+    <string name="files_up">Up</string>
+    <string name="files_file">File</string>
+    <string name="files_close">Close</string>
+    <string name="files_binary">(binary file)</string>
+    <string name="files_show_all">Show all (%1$d characters)</string>
 </resources>

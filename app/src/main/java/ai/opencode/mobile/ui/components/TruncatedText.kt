@@ -1,5 +1,6 @@
 package ai.opencode.mobile.ui.components
 
+import ai.opencode.mobile.R
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -10,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 
 /**
@@ -35,7 +37,7 @@ fun TruncatedText(
         )
         if (isTruncated) {
             TextButton(onClick = { expanded = true }) {
-                Text("Show all (${text.length} characters)")
+                Text(stringResource(R.string.files_show_all, text.length))
             }
         }
     }

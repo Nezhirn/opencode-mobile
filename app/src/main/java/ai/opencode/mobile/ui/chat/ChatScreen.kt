@@ -1,5 +1,6 @@
 package ai.opencode.mobile.ui.chat
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ChatMessageUi
 import ai.opencode.mobile.data.ChatState
 import ai.opencode.mobile.data.remote.Agent
@@ -74,6 +75,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,15 +111,15 @@ fun ChatScreen(
                 title = {
                     Column {
                         Text(
-                            text = chat.title.ifBlank { "Chat" },
+                            text = chat.title.ifBlank { stringResource(R.string.chat_title) },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        val modelLabel = selectedModel?.let {
+                            stringResource(R.string.chat_model_subtitle, it.providerID, it.modelID)
+                        } ?: stringResource(R.string.chat_default_model)
                         Text(
-                            text = buildString {
-                                append(selectedModel?.let { "${it.providerID}/${it.modelID}" } ?: "default model")
-                                selectedAgent?.let { append(" · $it") }
-                            },
+                            text = modelLabel + (selectedAgent?.let { " · $it" } ?: ""),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -125,15 +127,15 @@ fun ChatScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_back))
                     }
                 },
                 actions = {
                     IconButton(onClick = { showModelSheet = true }) {
-                        Icon(Icons.Filled.Tune, contentDescription = "Model and agent")
+                        Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.chat_model_and_agent))
                     }
                     IconButton(onClick = { onOpenFiles(sessionId) }) {
-                        Icon(Icons.Filled.Folder, contentDescription = "Files and changes")
+                        Icon(Icons.Filled.Folder, contentDescription = stringResource(R.string.sessions_open_files))
                     }
                 },
             )
@@ -321,7 +323,7 @@ private fun AssistantPart(part: Part) {
 
         "tool" -> ToolCard(part)
 
-        "step-start" -> StepDivider(label = "step")
+        "step-start" -> StepDivider(label = stringResource(R.string.chat_step))
 
         "step-finish" -> StepFinish(part)
 
@@ -330,15 +332,15 @@ private fun AssistantPart(part: Part) {
         "patch" -> PatchChip(part.files.orEmpty())
 
         "retry" -> Text(
-            text = "Retrying (attempt ${part.attempt ?: 1})…",
+            text = stringResource(R.string.chat_retrying, part.attempt ?: 1),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        "compaction" -> StepDivider(label = "context compacted")
+        "compaction" -> StepDivider(label = stringResource(R.string.chat_context_compacted))
 
         "subtask" -> Text(
-            text = "Subtask: ${part.description.orEmpty()}",
+            text = stringResource(R.string.chat_subtask, part.description.orEmpty()),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -347,7 +349,7 @@ private fun AssistantPart(part: Part) {
 
         "agent" -> part.name?.takeIf { it.isNotBlank() }?.let { name ->
             Text(
-                text = "Agent: $name",
+                text = stringResource(R.string.chat_agent, name),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -378,7 +380,7 @@ private fun ReasoningBlock(text: String) {
         Column(modifier = Modifier.padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "Thinking",
+                    text = stringResource(R.string.chat_thinking),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -543,7 +545,7 @@ private fun FileChip(name: String) {
 private fun PatchChip(files: List<String>) {
     if (files.isEmpty()) return
     Text(
-        text = "Changed: " + files.joinToString(", ") { it.substringAfterLast('/') },
+        text = stringResource(R.string.chat_changed_files, files.joinToString(", ") { it.substringAfterLast('/') }),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -591,7 +593,7 @@ private fun PermissionPanel(
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text(
-                        text = "Permission: ${request.permission}",
+                        text = stringResource(R.string.chat_permission, request.permission),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Medium,
                     )
@@ -607,9 +609,9 @@ private fun PermissionPanel(
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Button(onClick = { onReply(request.id, "once") }) { Text("Allow once") }
-                        OutlinedButton(onClick = { onReply(request.id, "always") }) { Text("Always") }
-                        TextButton(onClick = { onReply(request.id, "reject") }) { Text("Reject") }
+                        Button(onClick = { onReply(request.id, "once") }) { Text(stringResource(R.string.chat_allow_once)) }
+                        OutlinedButton(onClick = { onReply(request.id, "always") }) { Text(stringResource(R.string.chat_always)) }
+                        TextButton(onClick = { onReply(request.id, "reject") }) { Text(stringResource(R.string.chat_reject)) }
                     }
                 }
             }
@@ -652,7 +654,7 @@ private fun QuestionCard(
         Column(modifier = Modifier.padding(12.dp)) {
             request.questions.forEachIndexed { qIndex, question ->
                 Text(
-                    text = question.header.ifBlank { "Question" },
+                    text = question.header.ifBlank { stringResource(R.string.chat_question) },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Medium,
                 )
@@ -692,7 +694,7 @@ private fun QuestionCard(
                             current[qIndex] = value
                             customs.value = current
                         },
-                        placeholder = { Text("Custom answer") },
+                        placeholder = { Text(stringResource(R.string.chat_custom_answer)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                     )
@@ -713,8 +715,8 @@ private fun QuestionCard(
                         selected.toList()
                     }
                     onReply(request.id, answers)
-                }) { Text("Send") }
-                TextButton(onClick = { onReject(request.id) }) { Text("Reject") }
+                }) { Text(stringResource(R.string.chat_send)) }
+                TextButton(onClick = { onReject(request.id) }) { Text(stringResource(R.string.chat_reject)) }
             }
         }
     }
@@ -733,14 +735,14 @@ private fun InputBar(busy: Boolean, onSend: (String) -> Unit, onStop: () -> Unit
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
-                placeholder = { Text("Message opencode") },
+                placeholder = { Text(stringResource(R.string.chat_input_hint)) },
                 modifier = Modifier.weight(1f).heightIn(max = 160.dp),
                 maxLines = 6,
             )
             Spacer(Modifier.width(8.dp))
             if (busy) {
                 IconButton(onClick = onStop) {
-                    Icon(Icons.Filled.Stop, contentDescription = "Stop", tint = MaterialTheme.colorScheme.error)
+                    Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.chat_stop), tint = MaterialTheme.colorScheme.error)
                 }
             } else {
                 IconButton(
@@ -751,7 +753,7 @@ private fun InputBar(busy: Boolean, onSend: (String) -> Unit, onStop: () -> Unit
                         }
                     },
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_send))
                 }
             }
         }
@@ -772,11 +774,11 @@ private fun ModelSheet(
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
         var query by remember { mutableStateOf("") }
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("Model", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.models_title), style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("Search models") },
+                placeholder = { Text(stringResource(R.string.models_search)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             )
@@ -808,8 +810,10 @@ private fun ModelSheet(
 
             if (agents.isNotEmpty()) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                Text("Agent", style = MaterialTheme.typography.titleMedium)
-                AgentRow(name = "Default", selected = selectedAgent == null) { onSelectAgent(null) }
+                Text(stringResource(R.string.agents_title), style = MaterialTheme.typography.titleMedium)
+                AgentRow(name = stringResource(R.string.agents_default), selected = selectedAgent == null) {
+                    onSelectAgent(null)
+                }
                 agents.forEach { agent ->
                     AgentRow(name = agent.name, selected = selectedAgent == agent.name) {
                         onSelectAgent(agent.name)

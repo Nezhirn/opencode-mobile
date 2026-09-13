@@ -1,5 +1,6 @@
 package ai.opencode.mobile.ui.connect
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ConnectionState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,6 +34,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -81,14 +83,14 @@ fun ConnectScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (showBack) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_back))
                 }
             }
-            Text("OpenCode", style = MaterialTheme.typography.headlineMedium)
+            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            "Connect to a running opencode server",
+            stringResource(R.string.connect_subtitle),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -97,8 +99,8 @@ fun ConnectScreen(
         OutlinedTextField(
             value = baseUrl,
             onValueChange = { baseUrl = it },
-            label = { Text("Server URL") },
-            placeholder = { Text("http://192.168.1.10:4096") },
+            label = { Text(stringResource(R.string.connect_server_url)) },
+            placeholder = { Text(stringResource(R.string.connect_server_url_hint)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.fillMaxWidth(),
@@ -107,7 +109,7 @@ fun ConnectScreen(
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("Username") },
+            label = { Text(stringResource(R.string.connect_username)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -115,7 +117,7 @@ fun ConnectScreen(
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("Password") },
+            label = { Text(stringResource(R.string.connect_password)) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -129,11 +131,11 @@ fun ConnectScreen(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Allow insecure TLS",
+                    text = stringResource(R.string.connect_insecure_tls),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = "Trust self-signed certificates. Security risk — enable only for your own local HTTPS server.",
+                    text = stringResource(R.string.connect_insecure_tls_warning),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -151,7 +153,7 @@ fun ConnectScreen(
             enabled = baseUrl.isNotBlank() && connection !is ConnectionState.Connecting,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Connect")
+            Text(stringResource(R.string.connect_connect))
         }
 
         Spacer(Modifier.height(20.dp))
@@ -175,12 +177,13 @@ private fun ConnectionStatus(state: ConnectionState) {
             is ConnectionState.Connecting -> {
                 CircularProgressIndicator(modifier = Modifier.width(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(10.dp))
-                Text("Connecting…", style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.connect_connecting), style = MaterialTheme.typography.bodySmall)
             }
 
             is ConnectionState.Connected -> {
                 Text(
-                    text = "Connected${state.serverName?.let { " · opencode $it" } ?: ""}",
+                    text = state.serverName?.let { stringResource(R.string.connect_connected_version, it) }
+                        ?: stringResource(R.string.connect_connected),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -196,7 +199,7 @@ private fun ConnectionStatus(state: ConnectionState) {
 
             ConnectionState.Disconnected -> {
                 Text(
-                    text = "Not connected",
+                    text = stringResource(R.string.connect_not_connected),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

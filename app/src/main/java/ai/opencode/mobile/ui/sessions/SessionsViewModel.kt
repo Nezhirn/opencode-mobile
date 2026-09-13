@@ -3,7 +3,6 @@ package ai.opencode.mobile.ui.sessions
 import ai.opencode.mobile.data.AppRepository
 import ai.opencode.mobile.ui.repository
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
