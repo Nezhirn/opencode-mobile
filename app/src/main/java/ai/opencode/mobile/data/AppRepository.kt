@@ -488,7 +488,9 @@ class AppRepository(private val settingsStore: SettingsStore) {
     // --- Event handling ---
 
     private suspend fun handleEvent(client: OpenCodeClient, envelope: EventEnvelope) {
-        val props = envelope.properties ?: return
+        // Some events (notably server.connected) may arrive without properties;
+        // fall back to an empty object so they are not dropped wholesale.
+        val props = envelope.properties ?: JsonObject(emptyMap())
         when (envelope.type) {
             "server.connected" -> {
                 if (_connection.value !is ConnectionState.Connected) {
