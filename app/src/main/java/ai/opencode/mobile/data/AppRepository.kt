@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -152,42 +153,62 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private val _navigation = Channel<String>(Channel.BUFFERED)
     val navigation: Flow<String> = _navigation.receiveAsFlow()
 
+    /** Incremented to force the event stream to restart (see [refresh]). */
+    private val retryTick = MutableStateFlow(0)
+
     init {
         scope.launch {
-            clientFlow.collectLatest { client ->
-                if (client == null) {
-                    _connection.value = ConnectionState.Disconnected
-                    _sessions.update { emptyList() }
-                    _permissions.update { emptyList() }
-                    _questions.update { emptyList() }
-                    return@collectLatest
+            combine(clientFlow, retryTick) { client, _ -> client }
+                .collectLatest { client ->
+                    if (client == null) {
+                        _connection.value = ConnectionState.Disconnected
+                        _sessions.update { emptyList() }
+                        _permissions.update { emptyList() }
+                        _questions.update { emptyList() }
+                        return@collectLatest
+                    }
+                    refreshConnection(client)
+                    collectEvents(client)
                 }
-                refreshConnection(client)
-                collectEvents(client)
-            }
         }
     }
 
     /**
      * Keeps the event stream alive across clean server closes and transient
-     * failures. Permanent client errors (4xx other than 429) stop the loop to
-     * avoid hammering the server with invalid credentials or unknown routes.
+     * failures, with exponential backoff. Permanent client errors (4xx other than
+     * 429) stop the loop to avoid hammering the server, but [refresh] restarts it
+     * so fixing credentials or a route recovers without an app restart.
      */
     private suspend fun collectEvents(client: OpenCodeClient) {
+        var attempt = 0
         while (true) {
             try {
                 client.events().collect { envelope -> handleEvent(client, envelope) }
                 // Clean close (e.g. server restart): reconnect after a pause.
+                attempt = 0
                 delay(RECONNECT_DELAY_MILLIS)
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Throwable) {
                 _connection.value = ConnectionState.Error(error.message ?: "Event stream failed")
                 val code = (error as? OpenCodeException)?.code
-                if (code != null && code in 400..499 && code != 429) return
-                delay(RECONNECT_DELAY_MILLIS)
+                if (code != null && code in 400..499 && code != 429) {
+                    Log.w(TAG, "event stream stopped with HTTP $code", error)
+                    return
+                }
+                attempt += 1
+                delay(backoffMillis(attempt))
             }
         }
+    }
+
+    private fun backoffMillis(attempt: Int): Long {
+        val multiplier = 1L shl (attempt - 1).coerceIn(0, 5)
+        return (RECONNECT_DELAY_MILLIS * multiplier).coerceAtMost(MAX_RECONNECT_DELAY_MILLIS)
+    }
+
+    fun reconnect() {
+        retryTick.update { it + 1 }
     }
 
     private suspend fun refreshConnection(client: OpenCodeClient) {
@@ -213,9 +234,11 @@ class AppRepository(private val settingsStore: SettingsStore) {
     }
 
     fun refresh() {
+        // Restart the event stream as well: a Refresh tap must recover from a
+        // stream that stopped on a 4xx without requiring an app restart.
+        reconnect()
         scope.launch {
             val client = clientFlow.value ?: return@launch
-            refreshConnection(client)
             _chat.value.sessionId?.let { loadChat(client, it) }
         }
     }
@@ -633,6 +656,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private companion object {
         const val TAG = "AppRepository"
         const val RECONNECT_DELAY_MILLIS = 2_000L
+        const val MAX_RECONNECT_DELAY_MILLIS = 30_000L
         const val TEXT_PART_TYPE = "text"
         const val MESSAGE_ABORTED_ERROR = "MessageAbortedError"
         val TODO_LIST_SERIALIZER = kotlinx.serialization.builtins.ListSerializer(Todo.serializer())
