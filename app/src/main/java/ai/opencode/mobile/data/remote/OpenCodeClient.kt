@@ -73,6 +73,14 @@ class OpenCodeClient(
         return builder.build()
     }
 
+    /**
+     * Test hook: the event stream must never use body logging, otherwise
+     * HttpLoggingInterceptor buffers the endless response and no event arrives.
+     */
+    internal fun eventStreamHasBodyLogging(): Boolean =
+        (if (allowInsecureTls) insecureSseClient else sseClient)
+            .interceptors.any { it is HttpLoggingInterceptor }
+
     private fun newRequest(
         method: String,
         path: String,

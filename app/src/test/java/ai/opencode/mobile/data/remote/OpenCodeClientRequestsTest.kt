@@ -5,6 +5,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -70,6 +71,12 @@ class OpenCodeClientRequestsTest {
             "message should name the problem: ${error.message}",
             error.message.orEmpty().contains("Empty response body"),
         )
+    }
+
+    @Test
+    fun eventStreamClientDoesNotUseBodyLogging() {
+        // BODY logging reads the response to EOF, which never happens on SSE.
+        assertFalse(client().eventStreamHasBodyLogging())
     }
 
     @Test
