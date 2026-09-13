@@ -746,18 +746,20 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 }
             }
 
-            "permission.asked" -> loadPermissions(client)
+            // Network reloads run off the event collector so a slow request cannot
+            // stall event delivery (which would overflow the stream buffer).
+            "permission.asked" -> scope.launch { loadPermissions(client) }
             "permission.replied" -> {
                 val id = props.stringOrNull("requestID")
                 if (id != null) _permissions.update { current -> current.filterNot { it.id == id } }
-                else loadPermissions(client)
+                else scope.launch { loadPermissions(client) }
             }
 
-            "question.asked" -> loadQuestions(client)
+            "question.asked" -> scope.launch { loadQuestions(client) }
             "question.replied", "question.rejected" -> {
                 val id = props.stringOrNull("requestID")
                 if (id != null) _questions.update { current -> current.filterNot { it.id == id } }
-                else loadQuestions(client)
+                else scope.launch { loadQuestions(client) }
             }
 
             "todo.updated" -> {

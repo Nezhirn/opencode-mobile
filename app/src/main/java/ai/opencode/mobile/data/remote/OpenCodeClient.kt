@@ -4,8 +4,10 @@ import ai.opencode.mobile.BuildConfig
 import android.annotation.SuppressLint
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
@@ -312,7 +314,12 @@ class OpenCodeClient(
         val listener = object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 runCatching { json.decodeFromString<EventEnvelope>(data) }
-                    .onSuccess { trySend(it) }
+                    .onSuccess { envelope ->
+                        val result = trySend(envelope)
+                        if (result.isFailure) {
+                            Log.w(TAG, "Event buffer rejected event: ${result.exceptionOrNull()}")
+                        }
+                    }
                     .onFailure { error -> Log.w(TAG, "Failed to parse event: $data", error) }
             }
 
@@ -327,6 +334,9 @@ class OpenCodeClient(
         val source = factory.newEventSource(request, listener)
         awaitClose { source.cancel() }
     }
+        // Streaming deltas are additive: a dropped event cannot be recovered, so
+        // never apply backpressure that would discard them.
+        .buffer(Channel.UNLIMITED)
 
     private fun Call.timeout(millis: Long) {
         timeout().timeout(if (millis == 0L) 0 else millis, TimeUnit.MILLISECONDS)
