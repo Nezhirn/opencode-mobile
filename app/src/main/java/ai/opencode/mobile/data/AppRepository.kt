@@ -93,6 +93,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private var lastChatEventAt: Long = 0L
     private var busyWatchdog: Job? = null
 
+    /** Pending streaming text per "partId|field", flushed on a short interval. */
+    private val deltaBuffers = ConcurrentHashMap<String, StringBuilder>()
+    private var deltaFlushJob: Job? = null
+
     @Volatile
     private var serverVersion: String? = null
 
@@ -244,6 +248,39 @@ class AppRepository(private val settingsStore: SettingsStore) {
         }
     }
 
+    private fun enqueueDelta(partId: String, field: String, delta: String) {
+        deltaBuffers.computeIfAbsent("$partId|$field") { StringBuilder() }.append(delta)
+        if (deltaFlushJob?.isActive != true) {
+            deltaFlushJob = scope.launch {
+                delay(DELTA_FLUSH_INTERVAL_MILLIS)
+                flushDeltas()
+            }
+        }
+    }
+
+    /**
+     * Applies buffered streaming deltas in one state update. Streaming can emit
+     * thousands of tokens per second; coalescing them keeps state updates (and
+     * the resulting recompositions) bounded.
+     */
+    private fun flushDeltas() {
+        if (deltaBuffers.isEmpty()) return
+        val snapshot = HashMap(deltaBuffers)
+        deltaBuffers.clear()
+        _chat.update { state ->
+            var updated = state
+            snapshot.forEach { (key, buffer) ->
+                if (buffer.isNotEmpty()) {
+                    val separator = key.indexOf('|')
+                    val partId = key.substring(0, separator)
+                    val field = key.substring(separator + 1)
+                    updated = updated.applyDelta(partId, field, buffer.toString())
+                }
+            }
+            updated
+        }
+    }
+
     fun reconnect() {
         retryTick.update { it + 1 }
     }
@@ -390,6 +427,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
         // Cancel any in-flight load so a slower previous session cannot land in
         // the newly opened chat.
         loadChatJob?.cancel()
+        deltaBuffers.clear()
         _chat.value = ChatState(
             sessionId = sessionId,
             title = _sessions.value.firstOrNull { it.id == sessionId }?.title.orEmpty(),
@@ -406,6 +444,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
     fun closeChat(sessionId: String? = null) {
         if (sessionId != null && _chat.value.sessionId != sessionId) return
         loadChatJob?.cancel()
+        deltaBuffers.clear()
         _chat.value = ChatState()
     }
 
@@ -639,6 +678,9 @@ class AppRepository(private val settingsStore: SettingsStore) {
             "message.part.updated" -> {
                 val part = props.decodePart("part") ?: return
                 if (appliesToCurrentChat(props)) {
+                    // A full part supersedes any buffered deltas: apply them first
+                    // so nothing is silently dropped.
+                    flushDeltas()
                     _chat.update { state -> state.upsertPart(part) }
                 }
             }
@@ -661,11 +703,12 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 val partId = props.stringOrNull("partID") ?: return
                 val field = props.stringOrNull("field") ?: "text"
                 val delta = props.stringOrNull("delta") ?: return
-                _chat.update { state -> state.applyDelta(partId, field, delta) }
+                enqueueDelta(partId, field, delta)
             }
 
             "session.idle" -> {
                 if (sessionIdOf(props) == _chat.value.sessionId) {
+                    flushDeltas()
                     _chat.update { state -> state.copy(busy = false) }
                 }
             }
@@ -674,11 +717,13 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 if (sessionIdOf(props) != _chat.value.sessionId) return
                 val status = props["status"]?.let { runCatching { it.jsonObject.stringOrNull("type") }.getOrNull() }
                 val busy = status == "busy" || status == "retry"
+                if (!busy) flushDeltas()
                 _chat.update { state -> state.copy(busy = busy) }
                 if (busy) armBusyWatchdog()
             }
 
             "session.error" -> {
+                flushDeltas()
                 val error = props.decodeSessionError()
                 if (error?.name == MESSAGE_ABORTED_ERROR) {
                     if (appliesToCurrentChat(props)) {
@@ -764,6 +809,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
         const val RECONNECT_DELAY_MILLIS = 2_000L
         const val MAX_RECONNECT_DELAY_MILLIS = 30_000L
         const val BUSY_TIMEOUT_MILLIS = 300_000L
+        const val DELTA_FLUSH_INTERVAL_MILLIS = 50L
         const val TEXT_PART_TYPE = "text"
         const val MESSAGE_ABORTED_ERROR = "MessageAbortedError"
         val TODO_LIST_SERIALIZER = kotlinx.serialization.builtins.ListSerializer(Todo.serializer())
