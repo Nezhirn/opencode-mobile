@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -116,6 +117,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
     val settings: StateFlow<ConnectionSettings> = settingsStore.settings
         .stateIn(scope, SharingStarted.Eagerly, ConnectionSettings())
 
+    /** False until the persisted settings have been read from disk. */
+    private val _settingsLoaded = MutableStateFlow(false)
+    val settingsLoaded: StateFlow<Boolean> = _settingsLoaded.asStateFlow()
+
     private val clientFlow: StateFlow<OpenCodeClient?> = settings
         .map { config ->
             if (config.isConfigured) {
@@ -179,6 +184,11 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private val retryTick = MutableStateFlow(0)
 
     init {
+        scope.launch {
+            // Avoid a flash of the connect screen before DataStore has loaded.
+            settingsStore.settings.first()
+            _settingsLoaded.value = true
+        }
         scope.launch {
             combine(clientFlow, retryTick) { client, _ -> client }
                 .collectLatest { client ->

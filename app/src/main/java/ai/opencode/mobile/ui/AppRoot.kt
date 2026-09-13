@@ -5,8 +5,13 @@ import ai.opencode.mobile.ui.chat.ChatScreen
 import ai.opencode.mobile.ui.connect.ConnectScreen
 import ai.opencode.mobile.ui.files.FilesScreen
 import ai.opencode.mobile.ui.sessions.SessionsScreen
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
@@ -21,6 +26,14 @@ fun AppRoot() {
     val repository = (context.applicationContext as OpenCodeApplication).repository
 
     val settings by repository.settings.collectAsStateWithLifecycle()
+    val settingsLoaded by repository.settingsLoaded.collectAsStateWithLifecycle()
+
+    if (!settingsLoaded) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
 
     if (!settings.isConfigured) {
         ConnectScreen(onConnected = {})

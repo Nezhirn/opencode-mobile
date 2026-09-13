@@ -100,6 +100,7 @@ fun ChatScreen(
     val providers by viewModel.providers.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
+    val selectedAgent by viewModel.selectedAgent.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) { viewModel.open(sessionId) }
     var showModelSheet by remember { mutableStateOf(false) }
@@ -115,7 +116,10 @@ fun ChatScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = selectedModel?.let { "${it.providerID}/${it.modelID}" } ?: "default model",
+                            text = buildString {
+                                append(selectedModel?.let { "${it.providerID}/${it.modelID}" } ?: "default model")
+                                selectedAgent?.let { append(" · $it") }
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
