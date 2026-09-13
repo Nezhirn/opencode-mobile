@@ -35,4 +35,18 @@ class PromptRequestSerializationTest {
         assertFalse("model must be omitted when null: $body", body.contains("\"model\""))
         assertFalse("agent must be omitted when null: $body", body.contains("\"agent\""))
     }
+
+    @Test
+    fun serializesModelAndAgentWhenSelected() {
+        val request = PromptRequest(
+            model = PromptModel(providerID = "anthropic", modelID = "claude"),
+            agent = "build",
+            parts = listOf(TextPartInput(type = "text", text = "hi")),
+        )
+        val body = json.encodeToString(PromptRequest.serializer(), request)
+
+        assertTrue("providerID missing: $body", body.contains("\"providerID\":\"anthropic\""))
+        assertTrue("modelID missing: $body", body.contains("\"modelID\":\"claude\""))
+        assertTrue("agent missing: $body", body.contains("\"agent\":\"build\""))
+    }
 }
