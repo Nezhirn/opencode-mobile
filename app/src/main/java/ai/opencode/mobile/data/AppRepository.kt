@@ -478,15 +478,21 @@ class AppRepository(private val settingsStore: SettingsStore) {
             }
 
             "session.error" -> {
-                if (sessionIdOf(props) == _chat.value.sessionId) {
-                    val error = props.decodeSessionError()
-                    if (error?.name == MESSAGE_ABORTED_ERROR) {
+                val error = props.decodeSessionError()
+                if (error?.name == MESSAGE_ABORTED_ERROR) {
+                    if (appliesToCurrentChat(props)) {
                         // Abort is a normal cancellation, not a failure to show.
                         _chat.update { state -> state.copy(busy = false) }
-                    } else {
-                        val message = formatSessionError(error, props["error"])
-                        Log.w(TAG, "session.error: $message")
+                    }
+                } else {
+                    val message = formatSessionError(error, props["error"])
+                    Log.w(TAG, "session.error: $message")
+                    if (appliesToCurrentChat(props)) {
                         _chat.update { state -> state.copy(busy = false, error = message) }
+                    } else if (sessionIdOf(props) == null) {
+                        // Events without sessionID cannot be attributed; do not
+                        // swallow them, surface on the global connection banner.
+                        _connection.value = ConnectionState.Error(message)
                     }
                 }
             }
@@ -524,6 +530,15 @@ class AppRepository(private val settingsStore: SettingsStore) {
     }
 
     private fun sessionIdOf(props: JsonObject): String? = props.stringOrNull("sessionID")
+
+    /**
+     * The `sessionID` of `session.error` is optional. Without it the event cannot
+     * be attributed precisely, so it applies to whichever chat is currently open.
+     */
+    private fun appliesToCurrentChat(props: JsonObject): Boolean {
+        val sessionId = sessionIdOf(props) ?: return _chat.value.sessionId != null
+        return sessionId == _chat.value.sessionId
+    }
 
     private companion object {
         const val TAG = "AppRepository"
