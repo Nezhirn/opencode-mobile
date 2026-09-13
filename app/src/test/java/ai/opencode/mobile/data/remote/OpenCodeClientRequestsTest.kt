@@ -5,6 +5,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -53,5 +54,21 @@ class OpenCodeClientRequestsTest {
         assertEquals("POST", request.method)
         assertEquals("/question/que_1/reject", request.path)
         assertEquals("", request.body.readUtf8())
+    }
+
+    @Test
+    fun emptyResponseBodyThrowsMeaningfulError() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Length", "0"))
+
+        val error = runCatching {
+            client().createSession(CreateSessionRequest(title = "t"))
+        }.exceptionOrNull()
+
+        assertTrue("expected OpenCodeException but was $error", error is OpenCodeException)
+        assertEquals(200, (error as OpenCodeException).code)
+        assertTrue(
+            "message should name the problem: ${error.message}",
+            error.message.orEmpty().contains("Empty response body"),
+        )
     }
 }

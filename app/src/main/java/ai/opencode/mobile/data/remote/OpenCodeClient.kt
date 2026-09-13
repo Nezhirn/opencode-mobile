@@ -137,11 +137,15 @@ class OpenCodeClient(
                 throw OpenCodeException(response.code, extractError(text, response.message))
             }
             if (text.isBlank()) {
-                @Suppress("UNCHECKED_CAST")
-                Unit as T
-            } else {
-                json.decodeFromString(deserializer, text)
+                // Some opencode versions answer POST /session (and similar) with
+                // an empty 200 body. Report that explicitly instead of leaking a
+                // ClassCastException from an unchecked cast to T.
+                throw OpenCodeException(
+                    response.code,
+                    "Empty response body for ${request.url.encodedPath}",
+                )
             }
+            json.decodeFromString(deserializer, text)
         }
     }
 
