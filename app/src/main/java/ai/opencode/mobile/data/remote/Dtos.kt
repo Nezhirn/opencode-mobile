@@ -1,5 +1,6 @@
 package ai.opencode.mobile.data.remote
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -12,6 +13,7 @@ import kotlinx.serialization.json.JsonObject
  */
 
 @Serializable
+@Immutable
 data class Session(
     val id: String = "",
     val slug: String = "",
@@ -52,6 +54,7 @@ data class MessageModel(
 )
 
 @Serializable
+@Immutable
 data class Message(
     val id: String = "",
     @SerialName("sessionID") val sessionID: String = "",
@@ -73,6 +76,7 @@ data class Message(
 )
 
 @Serializable
+@Immutable
 data class Part(
     val id: String = "",
     @SerialName("sessionID") val sessionID: String = "",
@@ -119,6 +123,7 @@ data class Part(
 )
 
 @Serializable
+@Immutable
 data class ToolState(
     val status: String = "",
     val input: JsonObject? = null,
@@ -132,6 +137,7 @@ data class ToolState(
 )
 
 @Serializable
+@Immutable
 data class MessageWithParts(
     val info: Message = Message(),
     val parts: List<Part> = emptyList(),
@@ -220,6 +226,7 @@ data class QuestionReplyRequest(
 )
 
 @Serializable
+@Immutable
 data class Provider(
     val id: String = "",
     val name: String = "",
@@ -229,6 +236,7 @@ data class Provider(
 )
 
 @Serializable
+@Immutable
 data class Model(
     val id: String = "",
     @SerialName("providerID") val providerID: String = "",
@@ -246,6 +254,7 @@ data class ProviderList(
 )
 
 @Serializable
+@Immutable
 data class Agent(
     val name: String = "",
     val description: String? = null,
@@ -286,6 +295,7 @@ data class VcsFileStatus(
 )
 
 @Serializable
+@Immutable
 data class VcsFileDiff(
     val file: String = "",
     val patch: String? = null,
@@ -295,6 +305,7 @@ data class VcsFileDiff(
 )
 
 @Serializable
+@Immutable
 data class Todo(
     val content: String = "",
     val status: String = "pending",

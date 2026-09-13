@@ -26,6 +26,7 @@ import ai.opencode.mobile.data.remote.VcsFileDiff
 import ai.opencode.mobile.data.remote.VcsFileStatus
 import ai.opencode.mobile.data.remote.VcsInfo
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -68,11 +69,13 @@ sealed interface ConnectionState {
     data class Error(val message: String) : ConnectionState
 }
 
+@Immutable
 data class ChatMessageUi(
     val info: Message,
     val parts: List<Part>,
 )
 
+@Immutable
 data class ChatState(
     val sessionId: String? = null,
     val title: String = "",
