@@ -90,6 +90,10 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private var loadChatJob: Job? = null
 
     @Volatile
+    private var lastChatEventAt: Long = 0L
+    private var busyWatchdog: Job? = null
+
+    @Volatile
     private var serverVersion: String? = null
 
     /**
@@ -212,6 +216,32 @@ class AppRepository(private val settingsStore: SettingsStore) {
     private fun backoffMillis(attempt: Int): Long {
         val multiplier = 1L shl (attempt - 1).coerceIn(0, 5)
         return (RECONNECT_DELAY_MILLIS * multiplier).coerceAtMost(MAX_RECONNECT_DELAY_MILLIS)
+    }
+
+    /**
+     * Guards against a run that stalls without ever emitting session.idle or
+     * session.status (a known prompt_async issue on some server versions). Any
+     * event resets the timer, so long but active runs are not interrupted.
+     */
+    private fun armBusyWatchdog() {
+        lastChatEventAt = System.currentTimeMillis()
+        if (busyWatchdog?.isActive == true) return
+        busyWatchdog = scope.launch {
+            while (true) {
+                delay(BUSY_TIMEOUT_MILLIS / 2)
+                if (!_chat.value.busy) return@launch
+                if (System.currentTimeMillis() - lastChatEventAt >= BUSY_TIMEOUT_MILLIS) {
+                    Log.w(TAG, "busy watchdog: no events for $BUSY_TIMEOUT_MILLIS ms")
+                    _chat.update { state ->
+                        state.copy(
+                            busy = false,
+                            error = "No response from the server; the run may have stalled.",
+                        )
+                    }
+                    return@launch
+                }
+            }
+        }
     }
 
     fun reconnect() {
@@ -419,6 +449,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 return@launch
             }
             _chat.update { state -> state.copy(busy = true, error = null) }
+            armBusyWatchdog()
             val request = PromptRequest(
                 model = model,
                 agent = _selectedAgent.value,
@@ -558,6 +589,8 @@ class AppRepository(private val settingsStore: SettingsStore) {
     // --- Event handling ---
 
     private suspend fun handleEvent(client: OpenCodeClient, envelope: EventEnvelope) {
+        // Any event counts as progress for the busy watchdog.
+        lastChatEventAt = System.currentTimeMillis()
         // Some events (notably server.connected) may arrive without properties;
         // fall back to an empty object so they are not dropped wholesale.
         val props = envelope.properties ?: JsonObject(emptyMap())
@@ -642,6 +675,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
                 val status = props["status"]?.let { runCatching { it.jsonObject.stringOrNull("type") }.getOrNull() }
                 val busy = status == "busy" || status == "retry"
                 _chat.update { state -> state.copy(busy = busy) }
+                if (busy) armBusyWatchdog()
             }
 
             "session.error" -> {
@@ -729,6 +763,7 @@ class AppRepository(private val settingsStore: SettingsStore) {
         const val TAG = "AppRepository"
         const val RECONNECT_DELAY_MILLIS = 2_000L
         const val MAX_RECONNECT_DELAY_MILLIS = 30_000L
+        const val BUSY_TIMEOUT_MILLIS = 300_000L
         const val TEXT_PART_TYPE = "text"
         const val MESSAGE_ABORTED_ERROR = "MessageAbortedError"
         val TODO_LIST_SERIALIZER = kotlinx.serialization.builtins.ListSerializer(Todo.serializer())
