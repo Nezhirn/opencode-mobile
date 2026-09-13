@@ -45,13 +45,10 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -59,6 +56,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -187,6 +185,7 @@ fun ChatScreen(
             providers = providers,
             agents = agents,
             selected = selectedModel,
+            selectedAgent = selectedAgent,
             onDismiss = { showModelSheet = false },
             onSelectModel = {
                 viewModel.selectModel(it)
@@ -274,6 +273,21 @@ private fun MessageItem(message: ChatMessageUi) {
                     }
                 }
             }
+            message.parts.filter { it.type == "file" }.forEach { part ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.widthIn(max = 320.dp),
+                ) {
+                    Text(
+                        text = part.filename ?: part.url.orEmpty(),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     } else {
         Column(
@@ -329,7 +343,27 @@ private fun AssistantPart(part: Part) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        else -> Unit
+        "snapshot" -> Unit
+
+        "agent" -> part.name?.takeIf { it.isNotBlank() }?.let { name ->
+            Text(
+                text = "Agent: $name",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        // Never swallow a part silently: show its type so new server part kinds
+        // are at least visible instead of disappearing.
+        else -> {
+            if (part.type.isNotBlank()) {
+                Text(
+                    text = part.type,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -490,7 +524,19 @@ private fun StepFinish(part: Part) {
 
 @Composable
 private fun FileChip(name: String) {
-    AssistChip(onClick = {}, label = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+    // Not clickable: this is a label for an attached file, not an action.
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(50),
+    ) {
+        Text(
+            text = name,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @Composable
@@ -718,9 +764,10 @@ private fun ModelSheet(
     providers: List<Provider>,
     agents: List<Agent>,
     selected: PromptModel?,
+    selectedAgent: String?,
     onDismiss: () -> Unit,
     onSelectModel: (PromptModel) -> Unit,
-    onSelectAgent: (String) -> Unit,
+    onSelectAgent: (String?) -> Unit,
 ) {
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
         var query by remember { mutableStateOf("") }
@@ -762,14 +809,29 @@ private fun ModelSheet(
             if (agents.isNotEmpty()) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 Text("Agent", style = MaterialTheme.typography.titleMedium)
+                AgentRow(name = "Default", selected = selectedAgent == null) { onSelectAgent(null) }
                 agents.forEach { agent ->
-                    DropdownMenuItem(
-                        text = { Text(agent.name) },
-                        onClick = { onSelectAgent(agent.name) },
-                    )
+                    AgentRow(name = agent.name, selected = selectedAgent == agent.name) {
+                        onSelectAgent(agent.name)
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AgentRow(name: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(8.dp))
+        Text(name, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
