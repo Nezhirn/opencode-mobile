@@ -368,7 +368,13 @@ class AppRepository(private val settingsStore: SettingsStore) {
         loadChatJob = scope.launch { loadChat(client, sessionId) }
     }
 
-    fun closeChat() {
+    /**
+     * Clears the open chat. When [sessionId] is given the state is only cleared
+     * if it still belongs to that session, so a ViewModel being destroyed cannot
+     * wipe a chat that was opened afterwards.
+     */
+    fun closeChat(sessionId: String? = null) {
+        if (sessionId != null && _chat.value.sessionId != sessionId) return
         loadChatJob?.cancel()
         _chat.value = ChatState()
     }
