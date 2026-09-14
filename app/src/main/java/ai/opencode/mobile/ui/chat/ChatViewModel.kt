@@ -16,9 +16,11 @@ class ChatViewModel(private val repository: AppRepository) : ViewModel() {
 
     val chat = repository.chat
     val providers = repository.providers
+    val providersLoaded = repository.providersLoaded
     val agents = repository.agents
     val selectedModel = repository.selectedModel
     val selectedAgent = repository.selectedAgent
+    val modelNotice = repository.modelNotice
 
     private val sessionId = MutableStateFlow<String?>(null)
 
@@ -50,6 +52,8 @@ class ChatViewModel(private val repository: AppRepository) : ViewModel() {
     fun selectModel(model: PromptModel?) = repository.selectModel(model)
 
     fun selectAgent(agent: String?) = repository.selectAgent(agent)
+
+    fun clearModelNotice() = repository.clearModelNotice()
 
     fun replyPermission(requestId: String, reply: String) = repository.replyPermission(requestId, reply)
 

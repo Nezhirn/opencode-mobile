@@ -11,6 +11,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -47,20 +48,25 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
 
     private var sessionId: String? = null
 
+    // One job per concern. Without them a slow request could land after a newer
+    // one (stale file list for the wrong directory) or a repeated tap could run
+    // the same load several times over.
+    private var diffJob: Job? = null
+    private var vcsJob: Job? = null
+    private var browseJob: Job? = null
+    private var openFileJob: Job? = null
+
     fun load(sessionId: String) {
         if (this.sessionId == sessionId) return
         this.sessionId = sessionId
-        viewModelScope.launch {
-            _loading.value = true
-            _sessionDiff.value = repository.sessionDiff(sessionId)
-            _loading.value = false
-        }
+        refreshSessionDiff()
         loadVcs()
         openDirectory("")
     }
 
     fun loadVcs() {
-        viewModelScope.launch {
+        if (vcsJob?.isActive == true) return
+        vcsJob = viewModelScope.launch {
             _vcsInfo.value = repository.vcsInfo()
             _vcsStatus.value = repository.vcsStatus()
             _vcsDiff.value = runCatching { repository.vcsDiff("git") }.getOrDefault(emptyList())
@@ -69,22 +75,30 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun refreshSessionDiff() {
         val id = sessionId ?: return
-        viewModelScope.launch {
+        if (diffJob?.isActive == true) return
+        diffJob = viewModelScope.launch {
             _loading.value = true
-            _sessionDiff.value = repository.sessionDiff(id)
-            _loading.value = false
+            try {
+                _sessionDiff.value = repository.sessionDiff(id)
+            } finally {
+                _loading.value = false
+            }
         }
     }
 
+    /** Latest tap wins: an older listing must never repaint a directory the user left. */
     fun openDirectory(path: String) {
-        viewModelScope.launch {
+        browseJob?.cancel()
+        browseJob = viewModelScope.launch {
+            val nodes = repository.listFiles(path)
             _currentPath.value = path
-            _files.value = repository.listFiles(path)
+            _files.value = nodes
         }
     }
 
     fun openFile(path: String) {
-        viewModelScope.launch { _openedFile.value = repository.readFile(path) }
+        openFileJob?.cancel()
+        openFileJob = viewModelScope.launch { _openedFile.value = repository.readFile(path) }
     }
 
     fun closeFile() {

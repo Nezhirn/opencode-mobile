@@ -45,6 +45,46 @@ class ChatReducersTest {
     }
 
     @Test
+    fun upsertPartCanCreateTheMissingMessage() {
+        var state = ChatState(sessionId = "ses_1")
+            .upsertPart(textPart("prt_1", "msg_1", "early"), createMissingMessage = true)
+
+        assertEquals("early", state.messages.single().parts.single().text)
+
+        // The real message keeps the parts that arrived before it.
+        state = state.upsertMessage(message("msg_1"))
+        assertEquals("assistant", state.messages.single().info.role)
+        assertEquals("early", state.messages.single().parts.single().text)
+    }
+
+    @Test
+    fun applyDeltasUpdatesEveryBufferedPartInOnePass() {
+        var state = ChatState(sessionId = "ses_1")
+            .upsertMessage(message("msg_1"))
+            .upsertMessage(message("msg_2"))
+        state = state.upsertPart(textPart("prt_1", "msg_1", "a"))
+        state = state.upsertPart(textPart("prt_2", "msg_2", "b"))
+
+        val untouched = state.messages[0]
+        val result = state.applyDeltas(mapOf("prt_2|text" to "bb", "prt_9|text" to "ignored"))
+
+        assertEquals("bb", result.messages[1].parts.single().text!!.removePrefix("b"))
+        // Messages with no buffered part keep their identity so Compose can skip them.
+        assertTrue(untouched === result.messages[0])
+    }
+
+    @Test
+    fun applyDeltasIgnoresNonTextFields() {
+        val state = ChatState(sessionId = "ses_1")
+            .upsertMessage(message("msg_1"))
+            .upsertPart(textPart("prt_1", "msg_1", "keep"))
+
+        val result = state.applyDeltas(mapOf("prt_1|metadata" to "junk"))
+
+        assertEquals("keep", result.messages.single().parts.single().text)
+    }
+
+    @Test
     fun deltaAppendsToExistingPartOnly() {
         var state = ChatState(sessionId = "ses_1").upsertMessage(message("msg_1"))
         state = state.upsertPart(textPart("prt_1", "msg_1", "Hel"))

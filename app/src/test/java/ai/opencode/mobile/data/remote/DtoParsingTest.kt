@@ -1,6 +1,6 @@
 package ai.opencode.mobile.data.remote
 
-import ai.opencode.mobile.data.AppJson
+import ai.opencode.mobile.data.remote.OpenCodeJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
@@ -20,7 +20,7 @@ class DtoParsingTest {
              "time":{"created":1789247223324,"updated":1789247223324}}
         """.trimIndent()
 
-        val session = AppJson.decodeFromString(Session.serializer(), raw)
+        val session = OpenCodeJson.decodeFromString(Session.serializer(), raw)
 
         assertEquals("ses_f688e09e3ffepoSmJboq4cnRYo", session.id)
         assertEquals("mobile-test", session.title)
@@ -36,7 +36,7 @@ class DtoParsingTest {
              "title":"Run ls","metadata":{},"time":{"start":1,"end":2}}}
         """.trimIndent()
 
-        val part = AppJson.decodeFromString(Part.serializer(), raw)
+        val part = OpenCodeJson.decodeFromString(Part.serializer(), raw)
 
         assertEquals("tool", part.type)
         assertEquals("bash", part.tool)
@@ -52,7 +52,7 @@ class DtoParsingTest {
              "parts":[{"id":"prt_1","sessionID":"ses_1","messageID":"msg_1","type":"text","text":"hi"}]}
         """.trimIndent()
 
-        val message = AppJson.decodeFromString(MessageWithParts.serializer(), raw)
+        val message = OpenCodeJson.decodeFromString(MessageWithParts.serializer(), raw)
 
         assertEquals("user", message.info.role)
         assertEquals("build", message.info.agent)

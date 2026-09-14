@@ -6,15 +6,14 @@ import ai.opencode.mobile.data.remote.FileNode
 import ai.opencode.mobile.data.remote.VcsFileDiff
 import ai.opencode.mobile.data.remote.VcsFileStatus
 import ai.opencode.mobile.ui.components.TruncatedText
+import ai.opencode.mobile.ui.components.chunkedForLayout
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -48,13 +47,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -82,7 +80,7 @@ fun FilesScreen(
         if (sessionId != null) viewModel.load(sessionId) else viewModel.openDirectory("")
     }
 
-    var tab by remember { mutableIntStateOf(if (sessionId != null) 0 else 1) }
+    var tab by rememberSaveable { mutableIntStateOf(if (sessionId != null) 0 else 1) }
     val tabs = listOf(
         stringResource(R.string.files_tab_changes),
         stringResource(R.string.files_tab_files),
@@ -170,8 +168,8 @@ fun FilesScreen(
         }
     }
 
-    if (openedFile != null) {
-        FileViewerDialog(file = openedFile!!, onClose = viewModel::closeFile)
+    openedFile?.let { file ->
+        FileViewerDialog(file = file, onClose = viewModel::closeFile)
     }
 }
 
@@ -216,19 +214,20 @@ private fun DiffItem(diff: VcsFileDiff) {
             }
         }
         if (expanded && !diff.patch.isNullOrBlank()) {
-            PatchText(diff.patch)
+            PatchText(patch = diff.patch, stateKey = diff.file)
         }
     }
 }
 
 @Composable
-private fun PatchText(patch: String) {
+private fun PatchText(patch: String, stateKey: Any?) {
     Surface(
-        color = Color.Black.copy(alpha = 0.25f),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(max = 420.dp),
     ) {
         TruncatedText(
             text = patch,
+            stateKey = stateKey,
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             modifier = Modifier.verticalScroll(rememberScrollState()).padding(8.dp),
         )
@@ -300,10 +299,14 @@ private fun FileBrowser(
 
 @Composable
 private fun VcsView(branch: String?, status: List<VcsFileStatus>, diffs: List<VcsFileDiff>) {
-    val display = if (diffs.isNotEmpty()) {
-        diffs.map { VcsFileDiff(it.file, it.patch, it.additions, it.deletions, it.status) }
-    } else {
-        status.map { VcsFileDiff(it.file, null, it.additions, it.deletions, it.status) }
+    // Remembered: rebuilding the list on every recomposition handed the
+    // LazyColumn a new list identity each time and forced a full re-layout.
+    val display = remember(diffs, status) {
+        if (diffs.isNotEmpty()) {
+            diffs
+        } else {
+            status.map { VcsFileDiff(it.file, null, it.additions, it.deletions, it.status) }
+        }
     }
     Column(modifier = Modifier.fillMaxSize()) {
         if (branch != null) {
@@ -353,16 +356,32 @@ private fun FileViewerDialog(file: FileContent, onClose: () -> Unit) {
                     }
                 }
                 HorizontalDivider()
-                val text = if (file.type == "binary") stringResource(R.string.files_binary) else file.content
-                TruncatedText(
-                    text = text,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(12.dp),
-                )
+                val raw = if (file.type == "binary") stringResource(R.string.files_binary) else file.content
+                val capped = remember(raw) { raw.take(MAX_FILE_CHARS) }
+                // A LazyColumn over bounded chunks, not one Text in a
+                // verticalScroll: the old version measured the whole file on the
+                // main thread, which hung the app on anything sizeable.
+                val chunks = remember(capped) { capped.chunkedForLayout() }
+                val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                LazyColumn(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                    if (raw.length > MAX_FILE_CHARS) {
+                        item(key = "truncated") {
+                            Text(
+                                text = stringResource(R.string.files_too_large, MAX_FILE_CHARS),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            )
+                        }
+                    }
+                    items(chunks.size, key = { index -> index }) { index ->
+                        Text(text = chunks[index], style = mono)
+                    }
+                }
             }
         }
     }
 }
+
+/** Hard ceiling on what the viewer will lay out, regardless of file size. */
+private const val MAX_FILE_CHARS = 200_000

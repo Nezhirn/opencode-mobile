@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- libadwaita view_bg_color (dark). -->
+    <color name="window_background">#1E1E1E</color>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- libadwaita window_bg_color (light). Used for the pre-Compose window so
+         launching does not flash a colour the theme never uses. -->
+    <color name="window_background">#FAFAFB</color>
+</resources>

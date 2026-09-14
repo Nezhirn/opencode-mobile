@@ -4,15 +4,13 @@ import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ChatMessageUi
 import ai.opencode.mobile.data.ChatState
 import ai.opencode.mobile.data.remote.Agent
-import ai.opencode.mobile.data.remote.Model
 import ai.opencode.mobile.data.remote.Part
 import ai.opencode.mobile.data.remote.PermissionRequest
 import ai.opencode.mobile.data.remote.PromptModel
 import ai.opencode.mobile.data.remote.Provider
 import ai.opencode.mobile.data.remote.QuestionRequest
 import ai.opencode.mobile.ui.components.TruncatedText
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import ai.opencode.mobile.ui.theme.LocalGnomeAccents
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,7 +39,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
@@ -65,16 +64,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -83,8 +82,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,30 +97,44 @@ fun ChatScreen(
     val permissions by viewModel.permissions.collectAsStateWithLifecycle()
     val questions by viewModel.questions.collectAsStateWithLifecycle()
     val providers by viewModel.providers.collectAsStateWithLifecycle()
+    val providersLoaded by viewModel.providersLoaded.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
     val selectedAgent by viewModel.selectedAgent.collectAsStateWithLifecycle()
+    val modelNotice by viewModel.modelNotice.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) { viewModel.open(sessionId) }
-    var showModelSheet by remember { mutableStateOf(false) }
+    var showModelSheet by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    // The subtitle names the model every prompt will actually be
+                    // sent with, and opens the picker, so the choice is never
+                    // something the user has to infer.
+                    Column(modifier = Modifier.clickable { showModelSheet = true }) {
                         Text(
                             text = chat.title.ifBlank { stringResource(R.string.chat_title) },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        val modelLabel = selectedModel?.let {
-                            stringResource(R.string.chat_model_subtitle, it.providerID, it.modelID)
-                        } ?: stringResource(R.string.chat_default_model)
+                        val model = selectedModel
+                        val modelLabel = if (model == null) {
+                            stringResource(R.string.chat_no_model)
+                        } else {
+                            stringResource(R.string.chat_model_subtitle, model.providerID, model.modelID)
+                        }
                         Text(
                             text = modelLabel + (selectedAgent?.let { " · $it" } ?: ""),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (model == null) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 },
@@ -165,6 +178,25 @@ fun ChatScreen(
                 )
             }
 
+            modelNotice?.let { notice ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = notice,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = viewModel::clearModelNotice) {
+                        Text(stringResource(R.string.action_dismiss))
+                    }
+                }
+            }
+
             chat.error?.let { error ->
                 Text(
                     text = error,
@@ -185,6 +217,7 @@ fun ChatScreen(
     if (showModelSheet) {
         ModelSheet(
             providers = providers,
+            providersLoaded = providersLoaded,
             agents = agents,
             selected = selectedModel,
             selectedAgent = selectedAgent,
@@ -204,22 +237,35 @@ fun ChatScreen(
 @Composable
 private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
-    val lastMessage by rememberUpdatedState(chat.messages.lastOrNull())
 
-    // Follow the newest content only while the user is already near the bottom:
-    // scrollToItem (not animate) avoids cancelling/restarting an animation on
-    // every streamed token, and scrolling up is never fought.
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            val total = listState.layoutInfo.totalItemsCount
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            val nearBottom = total > 0 && lastVisible >= total - 2
-            val lastTextLength = lastMessage?.parts?.sumOf { it.text?.length ?: 0 } ?: 0
-            Triple(nearBottom, total, lastTextLength)
-        }.collect { (nearBottom, total, _) ->
-            if (nearBottom && total > 0) {
-                listState.scrollToItem(total - 1)
-            }
+    // Follow the newest content only while the user is already near the bottom,
+    // and only when the content itself changed. Driving this off layoutInfo
+    // instead made every scrollToItem produce a new layout, which produced a new
+    // emission — a scroll/layout loop that showed up as jank while streaming.
+    val nearBottom = remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val total = info.totalItemsCount
+            total == 0 || (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= total - 2
+        }
+    }
+    // Growth also happens in tool output and in new parts, not just in `text`:
+    // keying on text length alone froze the scroll for the whole duration of a
+    // tool call. Computed directly rather than through remember — summing a few
+    // lengths is cheaper than the deep equals a ChatMessageUi key would cost,
+    // and LaunchedEffect only compares the resulting ints.
+    val lastParts = chat.messages.lastOrNull()?.parts
+    val contentSignature = Triple(
+        chat.messages.size,
+        lastParts?.size ?: 0,
+        lastParts?.sumOf { part ->
+            (part.text?.length ?: 0) + (part.state?.output?.length ?: 0) + (part.state?.status?.length ?: 0)
+        } ?: 0,
+    )
+    LaunchedEffect(contentSignature) {
+        // Reading .value outside composition keeps this off the recomposition path.
+        if (nearBottom.value && chat.messages.isNotEmpty()) {
+            listState.scrollToItem(chat.messages.lastIndex)
         }
     }
 
@@ -411,10 +457,11 @@ private fun ToolCard(part: Part) {
     var expanded by remember { mutableStateOf(false) }
     val state = part.state
     val status = state?.status ?: "pending"
+    val accents = LocalGnomeAccents.current
     val (statusColor, statusLabel) = when (status) {
-        "completed" -> MaterialTheme.colorScheme.primary to "done"
+        "completed" -> accents.success to "done"
         "error" -> MaterialTheme.colorScheme.error to "error"
-        "running" -> MaterialTheme.colorScheme.tertiary to "running"
+        "running" -> MaterialTheme.colorScheme.primary to "running"
         else -> MaterialTheme.colorScheme.onSurfaceVariant to status
     }
 
@@ -458,13 +505,20 @@ private fun ToolCard(part: Part) {
             if (expanded) {
                 Spacer(Modifier.height(8.dp))
                 state?.input?.let { input ->
-                    MonoBlock(title = "input", text = remember(input) { input.toString() })
+                    // Keyed on the part id, not on the JsonObject: JsonObject.equals
+                    // deep-compares the whole tree on every recomposition, and
+                    // toString() on a write/edit input serialises a file's contents.
+                    MonoBlock(
+                        title = "input",
+                        text = remember(part.id, status) { input.toString() },
+                        stateKey = "${part.id}-input",
+                    )
                 }
                 state?.output?.let { output ->
-                    MonoBlock(title = "output", text = output)
+                    MonoBlock(title = "output", text = output, stateKey = "${part.id}-output")
                 }
                 state?.error?.let { error ->
-                    MonoBlock(title = "error", text = error)
+                    MonoBlock(title = "error", text = error, stateKey = "${part.id}-error")
                 }
             }
         }
@@ -472,17 +526,20 @@ private fun ToolCard(part: Part) {
 }
 
 @Composable
-private fun MonoBlock(title: String, text: String) {
+private fun MonoBlock(title: String, text: String, stateKey: Any? = Unit) {
     Column(modifier = Modifier.padding(top = 4.dp)) {
         Text(title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Surface(
-            color = Color.Black.copy(alpha = 0.25f),
+            // Theme-derived, so the block does not turn into a black slab in the
+            // light scheme the way a hardcoded translucent black did.
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
         ) {
             SelectionContainer {
                 TruncatedText(
                     text = text,
+                    stateKey = stateKey,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier
                         .verticalScroll(rememberScrollState())
@@ -510,8 +567,12 @@ private fun StepDivider(label: String) {
 private fun StepFinish(part: Part) {
     val tokens = part.tokens
     val info = buildString {
-        tokens?.get("input")?.jsonPrimitive?.contentOrNull?.let { append("in $it ") }
-        tokens?.get("output")?.jsonPrimitive?.contentOrNull?.let { append("out $it ") }
+        // Safe cast, not `.jsonPrimitive`: that accessor throws when the server
+        // sends an object (opencode already does for `tokens.cache`), and the
+        // crash repeated on every recomposition because the part is kept in
+        // repository state.
+        tokens?.tokenCount("input")?.let { append("in $it ") }
+        tokens?.tokenCount("output")?.let { append("out $it ") }
         part.cost?.takeIf { it > 0 }?.let { append("$" + "%.4f".format(it)) }
     }.trim()
     if (info.isNotEmpty()) {
@@ -523,6 +584,9 @@ private fun StepFinish(part: Part) {
         )
     }
 }
+
+private fun JsonObject.tokenCount(key: String): String? =
+    (this[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
 
 @Composable
 private fun FileChip(name: String) {
@@ -583,9 +647,14 @@ private fun PermissionPanel(
     permissions: List<PermissionRequest>,
     onReply: (String, String) -> Unit,
 ) {
+    // Capped and scrollable: as an unbounded sibling of the weighted message
+    // list this squeezed the list to zero height and pushed the input bar off
+    // screen, leaving no way to answer or type.
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(max = PANEL_MAX_HEIGHT)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -602,6 +671,8 @@ private fun PermissionPanel(
                             text = request.patterns.joinToString("\n"),
                             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            maxLines = 8,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 4.dp),
                         )
                     }
@@ -625,9 +696,13 @@ private fun QuestionPanel(
     onReply: (String, List<List<String>>) -> Unit,
     onReject: (String) -> Unit,
 ) {
+    // See PermissionPanel: a multi-question card is easily taller than the
+    // screen and must not push the input bar out of the layout.
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(max = PANEL_MAX_HEIGHT)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -724,7 +799,8 @@ private fun QuestionCard(
 
 @Composable
 private fun InputBar(busy: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
-    var text by remember { mutableStateOf("") }
+    // Saveable: a half-written prompt must survive rotation and process death.
+    var text by rememberSaveable { mutableStateOf("") }
     Surface(color = MaterialTheme.colorScheme.surface) {
         Row(
             modifier = Modifier
@@ -760,10 +836,47 @@ private fun InputBar(busy: Boolean, onSend: (String) -> Unit, onStop: () -> Unit
     }
 }
 
+/** Ceiling for the permission/question panels so the input bar always fits. */
+private val PANEL_MAX_HEIGHT = 260.dp
+
+/** One selectable model, flattened out of the provider map ahead of rendering. */
+@Immutable
+private data class ModelOption(
+    val providerId: String,
+    val providerName: String,
+    val modelId: String,
+    val modelName: String,
+) {
+    val key: String get() = "$providerId/$modelId"
+}
+
+/**
+ * Flattens the configured providers into selectable rows. The map key is the
+ * authoritative model id — a custom provider can leave the model's own `id`
+ * blank — and blank ids are dropped so no row can produce a duplicate LazyColumn
+ * key (which crashes the list) or a prompt with an empty modelID.
+ */
+private fun buildModelOptions(providers: List<Provider>): List<ModelOption> =
+    providers.flatMap { provider ->
+        val providerName = provider.name.ifBlank { provider.id }
+        provider.models.entries
+            .mapNotNull { (key, model) ->
+                val id = key.ifBlank { model.id }
+                if (id.isBlank()) {
+                    null
+                } else {
+                    ModelOption(provider.id, providerName, id, model.name.ifBlank { id })
+                }
+            }
+            .distinctBy { it.modelId }
+            .sortedBy { it.modelName.lowercase() }
+    }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelSheet(
     providers: List<Provider>,
+    providersLoaded: Boolean,
     agents: List<Agent>,
     selected: PromptModel?,
     selectedAgent: String?,
@@ -772,49 +885,107 @@ private fun ModelSheet(
     onSelectAgent: (String?) -> Unit,
 ) {
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
-        var query by remember { mutableStateOf("") }
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        var query by rememberSaveable { mutableStateOf("") }
+        // Built once per provider list / query instead of on every scroll frame.
+        val options = remember(providers) { buildModelOptions(providers) }
+        val visible = remember(options, query) {
+            if (query.isBlank()) {
+                options
+            } else {
+                options.filter { option ->
+                    option.modelName.contains(query, ignoreCase = true) ||
+                        option.modelId.contains(query, ignoreCase = true) ||
+                        option.providerName.contains(query, ignoreCase = true)
+                }
+            }
+        }
+
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text(stringResource(R.string.models_title), style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = stringResource(R.string.models_configured_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = { Text(stringResource(R.string.models_search)) },
                 singleLine = true,
+                enabled = options.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             )
-            LazyColumn(modifier = Modifier.heightIn(max = 280.dp)) {
-                providers.forEach { provider ->
-                    val models = provider.models.values.filter { model ->
-                        query.isBlank() ||
-                            model.name.contains(query, ignoreCase = true) ||
-                            model.id.contains(query, ignoreCase = true)
-                    }
-                    if (models.isEmpty()) return@forEach
-                    item(key = "provider-${provider.id}") {
+        }
+
+        // Models and agents share one scrollable list. Previously the agents sat
+        // in the sheet's own Column below a fixed-height list, so a server with
+        // more than a few agents pushed them past the bottom of the sheet with
+        // no way to reach them.
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp)
+                .padding(horizontal = 16.dp),
+        ) {
+            if (options.isEmpty()) {
+                item(key = "models-empty") {
+                    Text(
+                        text = if (providersLoaded) {
+                            stringResource(R.string.models_none_configured)
+                        } else {
+                            stringResource(R.string.models_loading)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                }
+            } else if (visible.isEmpty()) {
+                item(key = "models-no-match") {
+                    Text(
+                        text = stringResource(R.string.models_no_match),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                }
+            }
+
+            itemsIndexed(visible, key = { _, option -> option.key }) { index, option ->
+                Column {
+                    if (index == 0 || visible[index - 1].providerId != option.providerId) {
                         Text(
-                            text = provider.name.ifBlank { provider.id },
+                            text = option.providerName,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 6.dp),
                         )
                     }
-                    items(models, key = { "${provider.id}/${it.id}" }) { model ->
-                        ModelRow(
-                            model = model,
-                            selected = selected?.providerID == provider.id && selected.modelID == model.id,
-                            onClick = { onSelectModel(PromptModel(providerID = provider.id, modelID = model.id)) },
-                        )
-                    }
+                    ModelRow(
+                        name = option.modelName,
+                        id = option.modelId,
+                        selected = selected?.providerID == option.providerId && selected.modelID == option.modelId,
+                        onClick = {
+                            onSelectModel(PromptModel(providerID = option.providerId, modelID = option.modelId))
+                        },
+                    )
                 }
             }
 
             if (agents.isNotEmpty()) {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                Text(stringResource(R.string.agents_title), style = MaterialTheme.typography.titleMedium)
-                AgentRow(name = stringResource(R.string.agents_default), selected = selectedAgent == null) {
-                    onSelectAgent(null)
+                item(key = "agents-header") {
+                    Column {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text(stringResource(R.string.agents_title), style = MaterialTheme.typography.titleMedium)
+                    }
                 }
-                agents.forEach { agent ->
+                item(key = "agent-default") {
+                    AgentRow(name = stringResource(R.string.agents_default), selected = selectedAgent == null) {
+                        onSelectAgent(null)
+                    }
+                }
+                items(agents, key = { "agent-${it.name}" }) { agent ->
                     AgentRow(name = agent.name, selected = selectedAgent == agent.name) {
                         onSelectAgent(agent.name)
                     }
@@ -840,7 +1011,7 @@ private fun AgentRow(name: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ModelRow(model: Model, selected: Boolean, onClick: () -> Unit) {
+private fun ModelRow(name: String, id: String, selected: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -849,17 +1020,17 @@ private fun ModelRow(model: Model, selected: Boolean, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(model.name.ifBlank { model.id }, style = MaterialTheme.typography.bodyMedium)
+            Text(name, style = MaterialTheme.typography.bodyMedium)
             Text(
-                model.id,
+                id,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (selected) {
             Icon(
-                Icons.Filled.ChevronRight,
-                contentDescription = null,
+                Icons.Filled.Check,
+                contentDescription = stringResource(R.string.models_selected),
                 tint = MaterialTheme.colorScheme.primary,
             )
         }

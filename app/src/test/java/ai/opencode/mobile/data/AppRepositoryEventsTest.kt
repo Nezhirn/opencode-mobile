@@ -1,6 +1,7 @@
 package ai.opencode.mobile.data
 
 import ai.opencode.mobile.data.local.ConnectionSettings
+import ai.opencode.mobile.data.local.ModelSelection
 import ai.opencode.mobile.data.local.SettingsSource
 import ai.opencode.mobile.data.remote.EventEnvelope
 import ai.opencode.mobile.data.remote.Message
@@ -33,9 +34,15 @@ class AppRepositoryEventsTest {
 
     private class FakeSettingsSource : SettingsSource {
         private val state = MutableStateFlow(ConnectionSettings())
+        private val selection = MutableStateFlow(ModelSelection())
         override val settings: Flow<ConnectionSettings> = state
         override suspend fun save(settings: ConnectionSettings) {
             state.value = settings
+        }
+
+        override val modelSelection: Flow<ModelSelection> = selection
+        override suspend fun saveModelSelection(selection: ModelSelection) {
+            this.selection.value = selection
         }
     }
 
@@ -113,7 +120,7 @@ class AppRepositoryEventsTest {
     }
 
     @Test
-    fun sessionErrorWithoutSessionIdAndNoChatGoesToConnection() = runBlocking {
+    fun sessionErrorWithoutSessionIdAndNoChatGoesToSessionBanner() = runBlocking {
         val repository = repository()
 
         repository.handleEvent(
@@ -124,7 +131,48 @@ class AppRepositoryEventsTest {
             ),
         )
 
-        assertTrue(repository.connection.value is ConnectionState.Error)
+        // Routed to the dismissible sessions banner, not to the connection state:
+        // the stream is alive, and nothing would ever clear a connection error.
+        assertEquals("UnknownError", repository.sessionError.value)
+    }
+
+    @Test
+    fun messageUpdatedFromAnotherSessionIsIgnored() = runBlocking {
+        val repository = repository()
+        repository.setChatForTest(ChatState(sessionId = "ses_1"))
+
+        repository.handleEvent(
+            client,
+            event(
+                "message.updated",
+                buildJsonObject {
+                    put(
+                        "info",
+                        OpenCodeJson.encodeToJsonElement(
+                            Message.serializer(),
+                            Message(id = "msg_other", sessionID = "ses_2", role = "assistant"),
+                        ),
+                    )
+                },
+            ),
+        )
+
+        assertTrue(repository.chat.value.messages.isEmpty())
+    }
+
+    @Test
+    fun childSessionsStayOutOfTheSessionList() = runBlocking {
+        val repository = repository()
+
+        repository.handleEvent(
+            client,
+            event(
+                "session.created",
+                buildJsonObject { put("info", sessionInfo("ses_child", parentID = "ses_parent")) },
+            ),
+        )
+
+        assertTrue(repository.sessions.value.isEmpty())
     }
 
     @Test

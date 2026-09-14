@@ -2,6 +2,7 @@ package ai.opencode.mobile.ui.connect
 
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ConnectionState
+import ai.opencode.mobile.ui.theme.LocalGnomeAccents
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -56,7 +57,10 @@ fun ConnectScreen(
     var username by rememberSaveable { mutableStateOf("opencode") }
     var password by remember { mutableStateOf("") }
     var allowInsecureTls by rememberSaveable { mutableStateOf(false) }
-    var prefilled by rememberSaveable { mutableStateOf(false) }
+    // Deliberately NOT saveable: the password field is not saveable either, so a
+    // restored "already prefilled" flag left the password empty and Connect then
+    // overwrote a working credential with a blank one.
+    var prefilled by remember { mutableStateOf(false) }
 
     LaunchedEffect(settings) {
         if (!prefilled && settings.baseUrl.isNotEmpty()) {
@@ -185,7 +189,7 @@ private fun ConnectionStatus(state: ConnectionState) {
                     text = state.serverName?.let { stringResource(R.string.connect_connected_version, it) }
                         ?: stringResource(R.string.connect_connected),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = LocalGnomeAccents.current.success,
                 )
             }
 

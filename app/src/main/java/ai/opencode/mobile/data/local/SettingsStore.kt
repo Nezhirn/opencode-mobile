@@ -64,6 +64,22 @@ class SettingsStore(private val context: Context) : SettingsSource {
         }
     }
 
+    override val modelSelection: Flow<ModelSelection> = context.dataStore.data.map { prefs ->
+        ModelSelection(
+            providerId = prefs[KEY_MODEL_PROVIDER].orEmpty(),
+            modelId = prefs[KEY_MODEL_ID].orEmpty(),
+            agent = prefs[KEY_AGENT].orEmpty(),
+        )
+    }
+
+    override suspend fun saveModelSelection(selection: ModelSelection) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MODEL_PROVIDER] = selection.providerId
+            prefs[KEY_MODEL_ID] = selection.modelId
+            prefs[KEY_AGENT] = selection.agent
+        }
+    }
+
     private companion object {
         const val TAG = "SettingsStore"
         const val DEFAULT_USERNAME = "opencode"
@@ -71,5 +87,8 @@ class SettingsStore(private val context: Context) : SettingsSource {
         val KEY_USERNAME = stringPreferencesKey("username")
         val KEY_PASSWORD = stringPreferencesKey("password")
         val KEY_INSECURE_TLS = booleanPreferencesKey("allow_insecure_tls")
+        val KEY_MODEL_PROVIDER = stringPreferencesKey("selected_provider_id")
+        val KEY_MODEL_ID = stringPreferencesKey("selected_model_id")
+        val KEY_AGENT = stringPreferencesKey("selected_agent")
     }
 }

@@ -37,7 +37,7 @@
 
     <!-- Chat -->
     <string name="chat_title">Chat</string>
-    <string name="chat_default_model">default model</string>
+    <string name="chat_no_model">No model selected — tap to choose</string>
     <string name="chat_model_subtitle">%1$s/%2$s</string>
     <string name="chat_back">Back</string>
     <string name="chat_model_and_agent">Model and agent</string>
@@ -61,6 +61,11 @@
     <!-- Model sheet -->
     <string name="models_title">Model</string>
     <string name="models_search">Search models</string>
+    <string name="models_selected">Selected</string>
+    <string name="models_configured_hint">Only providers connected in opencode are listed.</string>
+    <string name="models_none_configured">No providers are connected in opencode. Run /connect on the server, then tap Refresh.</string>
+    <string name="models_loading">Loading models…</string>
+    <string name="models_no_match">No model matches this search.</string>
     <string name="agents_title">Agent</string>
     <string name="agents_default">Default</string>
 
@@ -77,8 +82,9 @@
     <string name="files_file">File</string>
     <string name="files_close">Close</string>
     <string name="files_binary">(binary file)</string>
-    <plurals name="files_show_all">
-        <item quantity="one">Show all (%1$d character)</item>
-        <item quantity="other">Show all (%1$d characters)</item>
+    <plurals name="files_show_more">
+        <item quantity="one">Show %1$d more character</item>
+        <item quantity="other">Show %1$d more characters</item>
     </plurals>
+    <string name="files_too_large">File is too large to display in full; showing the first %1$d characters.</string>
 </resources>

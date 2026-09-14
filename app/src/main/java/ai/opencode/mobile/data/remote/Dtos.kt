@@ -168,12 +168,6 @@ data class PromptRequest(
 )
 
 @Serializable
-data class PromptResponse(
-    val info: Message = Message(),
-    val parts: List<Part> = emptyList(),
-)
-
-@Serializable
 data class CreateSessionRequest(
     val title: String? = null,
     val agent: String? = null,
