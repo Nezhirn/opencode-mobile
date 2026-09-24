@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -129,67 +130,75 @@ fun ChatScreen(
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).imePadding()) {
-            if (chat.todos.isNotEmpty()) {
-                TodoStrip(chat.todos)
-            }
+        // Measured inside imePadding, so the budget shrinks while the keyboard is
+        // open. A fixed 260dp panel left the message list a sliver there.
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding).imePadding()) {
+            val panelCount = (if (questions.isNotEmpty()) 1 else 0) + (if (permissions.isNotEmpty()) 1 else 0)
+            val panelMaxHeight = minOf(maxHeight * PANEL_SCREEN_FRACTION, PANEL_MAX_HEIGHT) / panelCount.coerceAtLeast(1)
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (chat.todos.isNotEmpty()) {
+                    TodoStrip(chat.todos)
+                }
 
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                MessageList(chat = chat, modifier = Modifier.fillMaxSize())
-            }
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    MessageList(chat = chat, modifier = Modifier.fillMaxSize())
+                }
 
-            if (questions.isNotEmpty()) {
-                QuestionPanel(
-                    questions = questions,
-                    replying = replying,
-                    onReply = viewModel::replyQuestion,
-                    onReject = viewModel::rejectQuestion,
-                )
-            }
-
-            if (permissions.isNotEmpty()) {
-                PermissionPanel(
-                    permissions = permissions,
-                    replying = replying,
-                    onReply = viewModel::replyPermission,
-                )
-            }
-
-            modelNotice?.let { notice ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = notice,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
+                if (questions.isNotEmpty()) {
+                    QuestionPanel(
+                        questions = questions,
+                        replying = replying,
+                        maxHeight = panelMaxHeight,
+                        onReply = viewModel::replyQuestion,
+                        onReject = viewModel::rejectQuestion,
                     )
-                    TextButton(onClick = viewModel::clearModelNotice) {
-                        Text(stringResource(R.string.action_dismiss))
+                }
+
+                if (permissions.isNotEmpty()) {
+                    PermissionPanel(
+                        permissions = permissions,
+                        replying = replying,
+                        maxHeight = panelMaxHeight,
+                        onReply = viewModel::replyPermission,
+                    )
+                }
+
+                modelNotice?.let { notice ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = notice,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = viewModel::clearModelNotice) {
+                            Text(stringResource(R.string.action_dismiss))
+                        }
                     }
                 }
-            }
 
-            chat.error?.let { error ->
-                Text(
-                    text = error,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                chat.error?.let { error ->
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+
+                InputBar(
+                    text = draft,
+                    onTextChange = viewModel::onDraftChange,
+                    busy = chat.busy,
+                    onSend = viewModel::send,
+                    onStop = viewModel::abort,
                 )
             }
-
-            InputBar(
-                text = draft,
-                onTextChange = viewModel::onDraftChange,
-                busy = chat.busy,
-                onSend = viewModel::send,
-                onStop = viewModel::abort,
-            )
         }
     }
 
@@ -232,6 +241,12 @@ fun ChatScreen(
         )
     }
 }
+
+/** Share of the chat area the permission/question panels may take together. */
+private const val PANEL_SCREEN_FRACTION = 0.4f
+
+/** Absolute ceiling for the panels on tall screens. */
+private val PANEL_MAX_HEIGHT = 320.dp
 
 /** How close to the end still counts as "at the bottom" for following. */
 private val FOLLOW_TOLERANCE = 48.dp

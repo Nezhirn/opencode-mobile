@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalLayoutApi::class)
+
 package ai.opencode.mobile.ui.chat
 
 import ai.opencode.mobile.R
@@ -6,6 +8,8 @@ import ai.opencode.mobile.data.remote.QuestionRequest
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -31,20 +36,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-
-/** Ceiling for the permission/question panels so the input bar always fits. */
-private val PANEL_MAX_HEIGHT = 260.dp
 
 /**
  * Pending permission requests. [replying] holds the ids whose answer is in
  * flight; their buttons are disabled so a second tap cannot send a second answer.
+ * [maxHeight] comes from the space actually left on screen (it shrinks while the
+ * keyboard is open), so the message list above always keeps some room.
  */
 @Composable
 internal fun PermissionPanel(
     permissions: List<PermissionRequest>,
     replying: Set<String>,
+    maxHeight: Dp,
     onReply: (String, String) -> Unit,
 ) {
     // Capped and scrollable: as an unbounded sibling of the weighted message
@@ -53,7 +60,7 @@ internal fun PermissionPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = PANEL_MAX_HEIGHT)
+            .heightIn(max = maxHeight)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -79,16 +86,19 @@ private fun PermissionCard(request: PermissionRequest, enabled: Boolean, onReply
             if (patterns.isNotEmpty()) {
                 Text(
                     text = patterns,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    maxLines = 8,
+                    maxLines = 4,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
-            Row(
+            // Wraps instead of squeezing: in one Row the last button was left
+            // a few pixels and "Reject" rendered one letter per line.
+            FlowRow(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Button(enabled = enabled, onClick = { onReply(request.id, "once") }) {
                     Text(stringResource(R.string.chat_allow_once))
@@ -108,6 +118,7 @@ private fun PermissionCard(request: PermissionRequest, enabled: Boolean, onReply
 internal fun QuestionPanel(
     questions: List<QuestionRequest>,
     replying: Set<String>,
+    maxHeight: Dp,
     onReply: (String, List<List<String>>) -> Unit,
     onReject: (String) -> Unit,
 ) {
@@ -116,7 +127,7 @@ internal fun QuestionPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = PANEL_MAX_HEIGHT)
+            .heightIn(max = maxHeight)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -195,6 +206,7 @@ private fun QuestionCard(
                             customs.value = current
                         },
                         enabled = enabled,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         placeholder = { Text(stringResource(R.string.chat_custom_answer)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
@@ -205,9 +217,10 @@ private fun QuestionCard(
                 }
             }
 
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Button(
                     enabled = enabled,
