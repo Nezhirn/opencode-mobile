@@ -3,6 +3,7 @@ package ai.opencode.mobile.ui.sessions
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ConnectionState
 import ai.opencode.mobile.data.remote.Session
+import android.app.Activity
 import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -35,13 +37,19 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -64,7 +72,9 @@ fun SessionsScreen(
     val questions by viewModel.questions.collectAsStateWithLifecycle()
     val search by viewModel.search.collectAsStateWithLifecycle()
     val creating by viewModel.creatingSession.collectAsStateWithLifecycle()
+    val deleting by viewModel.deletingSessions.collectAsStateWithLifecycle()
     val sessionError by viewModel.sessionError.collectAsStateWithLifecycle()
+    var pendingDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
 
     val filtered = remember(sessions, search) {
         if (search.isBlank()) sessions
@@ -73,6 +83,27 @@ fun SessionsScreen(
 
     LaunchedEffect(Unit) {
         viewModel.navigation.collect { sessionId -> onOpenSession(sessionId) }
+    }
+    val activity = LocalContext.current as? Activity
+    DisposableEffect(viewModel) {
+        onDispose {
+            // Leaving for another screen cancels "open the new session"; a
+            // rotation only recreates this screen and must not.
+            if (activity?.isChangingConfigurations != true) viewModel.onScreenLeft()
+        }
+    }
+
+    // A session that disappeared meanwhile (deleted elsewhere) just closes the dialog.
+    val pendingDelete = pendingDeleteId?.let { id -> sessions.firstOrNull { it.id == id } }
+    if (pendingDelete != null) {
+        DeleteSessionDialog(
+            title = pendingDelete.displayTitle,
+            onConfirm = {
+                pendingDeleteId = null
+                viewModel.deleteSession(pendingDelete.id)
+            },
+            onDismiss = { pendingDeleteId = null },
+        )
     }
 
     Scaffold(
@@ -186,8 +217,9 @@ fun SessionsScreen(
                     items(filtered, key = { it.id }) { session ->
                         SessionRow(
                             session = session,
+                            deleting = session.id in deleting,
                             onClick = { onOpenSession(session.id) },
-                            onDelete = { viewModel.deleteSession(session.id) },
+                            onDelete = { pendingDeleteId = session.id },
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                     }
@@ -197,8 +229,27 @@ fun SessionsScreen(
     }
 }
 
+private val Session.displayTitle: String get() = title.ifBlank { slug.ifBlank { id } }
+
 @Composable
-private fun SessionRow(session: Session, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun DeleteSessionDialog(title: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.sessions_delete_title)) },
+        text = { Text(stringResource(R.string.sessions_delete_message, title)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.sessions_delete_confirm), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun SessionRow(session: Session, deleting: Boolean, onClick: () -> Unit, onDelete: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -208,7 +259,7 @@ private fun SessionRow(session: Session, onClick: () -> Unit, onDelete: () -> Un
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = session.title.ifBlank { session.slug.ifBlank { session.id } },
+                text = session.displayTitle,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -232,8 +283,12 @@ private fun SessionRow(session: Session, onClick: () -> Unit, onDelete: () -> Un
             )
         }
         Spacer(Modifier.width(8.dp))
-        IconButton(onClick = onDelete) {
-            Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.sessions_delete))
+        if (deleting) {
+            CircularProgressIndicator(modifier = Modifier.padding(12.dp).size(24.dp), strokeWidth = 2.dp)
+        } else {
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.sessions_delete))
+            }
         }
     }
 }

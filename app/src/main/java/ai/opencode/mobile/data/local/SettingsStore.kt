@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -79,6 +80,19 @@ class SettingsStore(private val context: Context) : SettingsSource {
             prefs[KEY_AGENT] = selection.agent
         }
     }
+
+    override fun enabledModels(serverUrl: String): Flow<Set<String>?> =
+        context.dataStore.data.map { prefs -> prefs[enabledModelsKey(serverUrl)] }
+
+    override suspend fun saveEnabledModels(serverUrl: String, models: Set<String>?) {
+        context.dataStore.edit { prefs ->
+            val key = enabledModelsKey(serverUrl)
+            // Absent means "not customised"; an empty set is a real choice.
+            if (models == null) prefs.remove(key) else prefs[key] = models
+        }
+    }
+
+    private fun enabledModelsKey(serverUrl: String) = stringSetPreferencesKey("enabled_models:$serverUrl")
 
     private companion object {
         const val TAG = "SettingsStore"

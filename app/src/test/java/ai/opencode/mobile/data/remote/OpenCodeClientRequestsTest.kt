@@ -46,6 +46,47 @@ class OpenCodeClientRequestsTest {
     }
 
     @Test
+    fun sessionStatusParsesRunStateBySession() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"ses_1":{"type":"busy"},"ses_2":{"type":"retry","attempt":2,"message":"rate limited","next":1}}""",
+            ),
+        )
+
+        val statuses = client().sessionStatus()
+
+        assertEquals("/session/status", server.takeRequest().path)
+        assertEquals("busy", statuses["ses_1"]?.type)
+        assertEquals("retry", statuses["ses_2"]?.type)
+    }
+
+    @Test
+    fun configProvidersParsesConfiguredProvidersOnly() = runBlocking {
+        // Shape of opencode 1.18.32; secrets stripped from `options`.
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """
+                {"providers":[{"id":"runware","name":"RunWare","source":"config","env":[],"options":{},
+                  "models":{"zai:glm@5.3-flash":{"id":"zai:glm@5.3-flash","providerID":"runware",
+                    "api":{"id":"zai:glm@5.3-flash","url":"","npm":"@ai-sdk/openai-compatible"},
+                    "name":"GLM 5.3 Flash","family":"","capabilities":{"reasoning":true,"toolcall":true},
+                    "cost":{"input":0,"output":0,"cache":{"read":0,"write":0}},
+                    "limit":{"context":1048576,"output":131072},"status":"active","options":{},
+                    "headers":{},"release_date":"","variants":{"max":{"reasoning_effort":"max"}}}}}],
+                 "default":{"runware":"zai:glm@5.3-flash"}}
+                """.trimIndent(),
+            ),
+        )
+
+        val list = client().configProviders().asProviderList()
+
+        assertEquals("/config/providers", server.takeRequest().path)
+        assertEquals(listOf("runware"), list.connected)
+        assertEquals(listOf("zai:glm@5.3-flash"), list.all.single().models.keys.toList())
+        assertEquals(mapOf("runware" to "zai:glm@5.3-flash"), list.default)
+    }
+
+    @Test
     fun rejectQuestionSendsPostWithEmptyBody() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(200))
 

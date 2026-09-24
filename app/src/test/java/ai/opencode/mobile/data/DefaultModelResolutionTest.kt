@@ -52,10 +52,24 @@ class DefaultModelResolutionTest {
     }
 
     @Test
-    fun declaredDefaultCountsAsConfiguredWhenConnectedIsEmpty() {
+    fun declaredDefaultDoesNotMakeAProviderConfigured() {
+        // /provider declares a default for every catalogue provider, so a default
+        // alone must never put a provider into the picker.
         val list = ProviderList(
             all = listOf(provider("a", "m1"), provider("b", "m2")),
-            default = mapOf("b" to "m2"),
+            default = mapOf("a" to "m1", "b" to "m2"),
+        )
+
+        assertTrue(configuredProviders(list).isEmpty())
+        assertNull(resolveDefaultModel(list))
+    }
+
+    @Test
+    fun onlyConnectedProvidersAreOfferedFromTheCatalogue() {
+        val list = ProviderList(
+            all = listOf(provider("a", "m1"), provider("b", "m2"), provider("c", "m3")),
+            default = mapOf("a" to "m1", "b" to "m2", "c" to "m3"),
+            connected = listOf("b"),
         )
 
         assertEquals(listOf("b"), configuredProviders(list).map { it.id })

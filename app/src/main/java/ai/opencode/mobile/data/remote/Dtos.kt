@@ -247,6 +247,22 @@ data class ProviderList(
     val connected: List<String> = emptyList(),
 )
 
+/**
+ * `GET /config/providers`: only the providers opencode is configured for (API
+ * key, OAuth, config or built-in), with their models and default model. Unlike
+ * `/provider` it never includes the rest of the models.dev catalogue.
+ */
+@Serializable
+data class ConfigProviders(
+    val providers: List<Provider> = emptyList(),
+    val default: Map<String, String> = emptyMap(),
+) {
+    fun asProviderList(): ProviderList {
+        val ids = providers.map { it.id }
+        return ProviderList(all = providers, default = default.filterKeys { it in ids }, connected = ids)
+    }
+}
+
 @Serializable
 @Immutable
 data class Agent(
@@ -304,6 +320,15 @@ data class Todo(
     val content: String = "",
     val status: String = "pending",
     val priority: String = "medium",
+)
+
+/**
+ * One entry of `GET /session/status`: `idle`, `busy` or `retry`. Sessions that are
+ * not listed are idle.
+ */
+@Serializable
+data class SessionStatusInfo(
+    val type: String = "",
 )
 
 @Serializable

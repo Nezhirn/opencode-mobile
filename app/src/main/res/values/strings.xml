@@ -33,7 +33,11 @@
         <item quantity="one">%1$d question</item>
         <item quantity="other">%1$d questions</item>
     </plurals>
+    <string name="sessions_delete_title">Delete session?</string>
+    <string name="sessions_delete_message">“%1$s” and its whole history will be deleted on the server. This cannot be undone.</string>
+    <string name="sessions_delete_confirm">Delete</string>
     <string name="action_dismiss">Dismiss</string>
+    <string name="action_cancel">Cancel</string>
 
     <!-- Chat -->
     <string name="chat_title">Chat</string>
@@ -57,6 +61,11 @@
     <string name="chat_always">Always</string>
     <string name="chat_reject">Reject</string>
     <string name="chat_changed_files">Changed: %1$s</string>
+    <string name="chat_empty">Send a message to start the session.</string>
+
+    <!-- Long text -->
+    <string name="text_show_all">Show all</string>
+    <string name="text_show_less">Show less</string>
 
     <!-- Model sheet -->
     <string name="models_title">Model</string>
@@ -66,6 +75,11 @@
     <string name="models_none_configured">No providers are connected in opencode. Run /connect on the server, then tap Refresh.</string>
     <string name="models_loading">Loading models…</string>
     <string name="models_no_match">No model matches this search.</string>
+    <string name="models_none_enabled">All models are hidden. Open Manage models to turn some on.</string>
+    <string name="models_manage">Manage models</string>
+    <string name="models_manage_hint">Choose which models appear in the picker. Hidden models stay available in opencode; turn them back on here any time.</string>
+    <string name="models_show_all">Show all</string>
+    <string name="models_enabled_count">%1$d of %2$d shown</string>
     <string name="agents_title">Agent</string>
     <string name="agents_default">Default</string>
 

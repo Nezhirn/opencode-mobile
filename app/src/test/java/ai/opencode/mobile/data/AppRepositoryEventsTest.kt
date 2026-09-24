@@ -44,6 +44,9 @@ class AppRepositoryEventsTest {
         override suspend fun saveModelSelection(selection: ModelSelection) {
             this.selection.value = selection
         }
+
+        override fun enabledModels(serverUrl: String): Flow<Set<String>?> = MutableStateFlow(null)
+        override suspend fun saveEnabledModels(serverUrl: String, models: Set<String>?) = Unit
     }
 
     private val client = OpenCodeClient("http://127.0.0.1:1")
@@ -270,5 +273,107 @@ class AppRepositoryEventsTest {
 
         delay(150)
         assertEquals("hello", repository.chat.value.messages.single().parts.single().text)
+    }
+
+    private fun userMessageUpdated(id: String, sessionId: String) = event(
+        "message.updated",
+        buildJsonObject {
+            put(
+                "info",
+                OpenCodeJson.encodeToJsonElement(
+                    Message.serializer(),
+                    Message(id = id, sessionID = sessionId, role = "user"),
+                ),
+            )
+        },
+    )
+
+    @Test
+    fun userMessageFromAnotherSessionLeavesEchoAlone() = runBlocking {
+        val repository = repository()
+        repository.setChatForTest(
+            ChatState(sessionId = "ses_2", messages = listOf(localUserMessage("local-1", "hi"))),
+        )
+
+        // Server copy of a prompt sent earlier in ses_1 arrives after the switch.
+        repository.handleEvent(client, userMessageUpdated("msg_old", "ses_1"))
+        repository.handleEvent(client, userMessageUpdated("msg_new", "ses_2"))
+
+        val messages = repository.chat.value.messages
+        assertEquals(listOf("msg_new"), messages.map { it.info.id })
+        assertEquals("hi", messages.single().parts.single().text)
+    }
+
+    @Test
+    fun permissionAskedIsAddedFromPayloadAndRemovedOnReply() = runBlocking {
+        val repository = repository()
+
+        repository.handleEvent(
+            client,
+            event(
+                "permission.asked",
+                buildJsonObject {
+                    put("id", "per_1")
+                    put("sessionID", "ses_1")
+                    put("permission", "bash")
+                },
+            ),
+        )
+        assertEquals(listOf("per_1"), repository.permissions.value.map { it.id })
+        assertEquals("bash", repository.permissions.value.single().permission)
+
+        repository.handleEvent(client, event("permission.replied", buildJsonObject { put("requestID", "per_1") }))
+        assertTrue(repository.permissions.value.isEmpty())
+    }
+
+    @Test
+    fun repeatedPermissionAskedDoesNotDuplicate() = runBlocking {
+        val repository = repository()
+        val asked = event(
+            "permission.asked",
+            buildJsonObject {
+                put("id", "per_1")
+                put("sessionID", "ses_1")
+            },
+        )
+
+        repository.handleEvent(client, asked)
+        repository.handleEvent(client, asked)
+
+        assertEquals(1, repository.permissions.value.size)
+    }
+
+    @Test
+    fun childSessionStatusDoesNotFlipParentBusy() = runBlocking {
+        val repository = repository()
+        repository.setChatForTest(ChatState(sessionId = "ses_parent", busy = true))
+        repository.handleEvent(
+            client,
+            event("session.created", buildJsonObject { put("info", sessionInfo("ses_child", parentID = "ses_parent")) }),
+        )
+
+        repository.handleEvent(
+            client,
+            event(
+                "session.status",
+                buildJsonObject {
+                    put("sessionID", "ses_child")
+                    putJsonObject("status") { put("type", "idle") }
+                },
+            ),
+        )
+
+        assertTrue(repository.chat.value.busy)
+    }
+
+    @Test
+    fun heartbeatWithoutPropertiesIsIgnored() = runBlocking {
+        val repository = repository()
+        val before = ChatState(sessionId = "ses_1", busy = true)
+        repository.setChatForTest(before)
+
+        repository.handleEvent(client, event("server.heartbeat"))
+
+        assertEquals(before, repository.chat.value)
     }
 }

@@ -13,6 +13,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -197,6 +199,13 @@ class OpenCodeClient(
     suspend fun promptAsync(sessionId: String, request: PromptRequest) =
         executeUnit("POST", "/session/$sessionId/prompt_async", body = jsonBody(request))
 
+    /** Run state of every session that is not idle, keyed by session id. */
+    suspend fun sessionStatus(): Map<String, SessionStatusInfo> =
+        execute(
+            newRequest("GET", "/session/status"),
+            MapSerializer(String.serializer(), SessionStatusInfo.serializer()),
+        )
+
     suspend fun abort(sessionId: String) =
         executeUnit("POST", "/session/$sessionId/abort")
 
@@ -223,8 +232,13 @@ class OpenCodeClient(
     suspend fun rejectQuestion(requestId: String) =
         executeUnit("POST", "/question/$requestId/reject")
 
+    /** Full models.dev catalogue plus `connected`; prefer [configProviders]. */
     suspend fun listProviders(): ProviderList =
         execute(newRequest("GET", "/provider"), ProviderList.serializer())
+
+    /** Only the providers opencode is configured for, with their models. */
+    suspend fun configProviders(): ConfigProviders =
+        execute(newRequest("GET", "/config/providers"), ConfigProviders.serializer())
 
     suspend fun listAgents(): List<Agent> =
         execute(newRequest("GET", "/agent"), ListSerializer(Agent.serializer()))

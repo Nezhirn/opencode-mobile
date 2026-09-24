@@ -25,4 +25,13 @@ interface SettingsSource {
 
     val modelSelection: Flow<ModelSelection>
     suspend fun saveModelSelection(selection: ModelSelection)
+
+    /**
+     * Models shown in the picker for the server at [serverUrl], as
+     * "providerId/modelId" keys; null until the user customises the list (then
+     * every configured model is shown). Kept per server: model ids of one server
+     * mean nothing on another.
+     */
+    fun enabledModels(serverUrl: String): Flow<Set<String>?>
+    suspend fun saveEnabledModels(serverUrl: String, models: Set<String>?)
 }

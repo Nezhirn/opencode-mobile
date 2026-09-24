@@ -7,6 +7,7 @@ import ai.opencode.mobile.data.remote.VcsFileDiff
 import ai.opencode.mobile.data.remote.VcsFileStatus
 import ai.opencode.mobile.ui.components.TruncatedText
 import ai.opencode.mobile.ui.components.chunkedForLayout
+import ai.opencode.mobile.ui.components.safePrefix
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +20,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -185,8 +187,12 @@ private fun DiffList(diffs: List<VcsFileDiff>, loading: Boolean, emptyText: Stri
         EmptyState(emptyText)
         return
     }
+    // Keyed by path alone: an index in the key reset every row's expanded state
+    // below the first insertion whenever a refresh reordered the list. Paths are
+    // deduplicated because a duplicate key crashes the LazyColumn.
+    val unique = remember(diffs) { diffs.distinctBy { it.file } }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
-        itemsIndexed(diffs, key = { index, diff -> "$index:${diff.file}" }) { _, diff ->
+        items(unique, key = { diff -> diff.file }) { diff ->
             DiffItem(diff)
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
         }
@@ -195,7 +201,7 @@ private fun DiffList(diffs: List<VcsFileDiff>, loading: Boolean, emptyText: Stri
 
 @Composable
 private fun DiffItem(diff: VcsFileDiff) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable(diff.file) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -264,8 +270,9 @@ private fun FileBrowser(
         if (list.isEmpty()) {
             EmptyState(stringResource(R.string.files_empty_dir))
         } else {
+            val unique = remember(list) { list.distinctBy { it.path } }
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                itemsIndexed(list, key = { index, node -> "$index:${node.path}" }) { _, node ->
+                items(unique, key = { node -> node.path }) { node ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -357,25 +364,29 @@ private fun FileViewerDialog(file: FileContent, onClose: () -> Unit) {
                 }
                 HorizontalDivider()
                 val raw = if (file.type == "binary") stringResource(R.string.files_binary) else file.content
-                val capped = remember(raw) { raw.take(MAX_FILE_CHARS) }
+                val capped = remember(raw) { raw.safePrefix(MAX_FILE_CHARS) }
                 // A LazyColumn over bounded chunks, not one Text in a
                 // verticalScroll: the old version measured the whole file on the
                 // main thread, which hung the app on anything sizeable.
                 val chunks = remember(capped) { capped.chunkedForLayout() }
                 val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
-                LazyColumn(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-                    if (raw.length > MAX_FILE_CHARS) {
-                        item(key = "truncated") {
-                            Text(
-                                text = stringResource(R.string.files_too_large, MAX_FILE_CHARS),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 8.dp),
-                            )
+                // Selection spans only the chunks currently composed, which is
+                // enough to copy a snippet from what is on screen.
+                SelectionContainer {
+                    LazyColumn(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                        if (raw.length > MAX_FILE_CHARS) {
+                            item(key = "truncated") {
+                                Text(
+                                    text = stringResource(R.string.files_too_large, MAX_FILE_CHARS),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                )
+                            }
                         }
-                    }
-                    items(chunks.size, key = { index -> index }) { index ->
-                        Text(text = chunks[index], style = mono)
+                        items(chunks.size, key = { index -> index }) { index ->
+                            Text(text = chunks[index], style = mono)
+                        }
                     }
                 }
             }
