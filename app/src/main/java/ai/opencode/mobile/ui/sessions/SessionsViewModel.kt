@@ -16,12 +16,23 @@ import kotlinx.coroutines.launch
 class SessionsViewModel(private val repository: AppRepository) : ViewModel() {
 
     val sessions = repository.sessions
+    val sessionsLoaded = repository.sessionsLoaded
     val connection = repository.connection
     val permissions = repository.permissions
     val questions = repository.questions
     val creatingSession = repository.creatingSession
     val deletingSessions = repository.deletingSessions
     val sessionError = repository.sessionError
+
+    val mcpServers = repository.mcpServers
+    val mcpToggling = repository.mcpToggling
+    val mcpError = repository.mcpError
+
+    fun refreshMcp() = repository.refreshMcp()
+
+    fun setMcpEnabled(name: String, enabled: Boolean) = repository.setMcpEnabled(name, enabled)
+
+    fun clearMcpError() = repository.clearMcpError()
 
     private val _search = MutableStateFlow("")
     val search = _search.asStateFlow()
@@ -65,11 +76,6 @@ class SessionsViewModel(private val repository: AppRepository) : ViewModel() {
     fun clearSessionError() = repository.clearSessionError()
 
     fun deleteSession(sessionId: String) = repository.deleteSession(sessionId)
-
-    init {
-        // Ensure the list is populated when opening the app on a saved profile.
-        repository.refresh()
-    }
 
     companion object {
         val Factory = viewModelFactory {

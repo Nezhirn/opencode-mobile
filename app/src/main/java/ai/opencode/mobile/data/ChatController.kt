@@ -1,5 +1,6 @@
 package ai.opencode.mobile.data
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.remote.OpenCodeClient
 import ai.opencode.mobile.data.remote.PromptRequest
 import ai.opencode.mobile.data.remote.Session
@@ -35,7 +36,7 @@ internal class ChatController(
     /** True while the run in this session waits for a permission or question answer. */
     private val awaitingUserInput: (String) -> Boolean,
     /** Receives `session.error` messages that cannot be attributed to any chat. */
-    private val onUnattributedError: (String) -> Unit,
+    private val onUnattributedError: (UiText) -> Unit,
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -43,6 +44,14 @@ internal class ChatController(
     private val currentSessionId: String? get() = _state.value.sessionId
 
     private var loadJob: Job? = null
+
+    /**
+     * The screen that opened the chat last. Leaving a chat and reopening it
+     * quickly creates a new screen before the old one is destroyed; the old one
+     * must not then close the chat the new one shows.
+     */
+    @Volatile
+    private var owner: Any? = null
 
     /**
      * Incremented by every event or action that decides the busy flag. A status
@@ -69,7 +78,8 @@ internal class ChatController(
     /** Makes local echo ids unique even for two sends within the same millisecond. */
     private val localMessageCounter = AtomicLong()
 
-    fun open(sessionId: String, force: Boolean = false) {
+    fun open(sessionId: String, force: Boolean = false, owner: Any? = null) {
+        if (owner != null) this.owner = owner
         // Re-entering the same chat (returning from the files screen, a
         // recomposition) must not wipe the state: doing so dropped buffered
         // deltas, reset scroll position and cleared `busy`, which made the Stop
@@ -96,8 +106,10 @@ internal class ChatController(
      * if it still belongs to that session, so a ViewModel being destroyed cannot
      * wipe a chat that was opened afterwards.
      */
-    fun close(sessionId: String? = null) {
+    fun close(sessionId: String? = null, owner: Any? = null) {
         if (sessionId != null && currentSessionId != sessionId) return
+        if (owner != null && owner !== this.owner) return
+        this.owner = null
         loadJob?.cancel()
         clearDeltas()
         _state.value = ChatState()
@@ -130,6 +142,11 @@ internal class ChatController(
 
     private suspend fun load(client: OpenCodeClient, sessionId: String) {
         val epoch = statusEpoch.get()
+        // What was on screen before the request: anything else found in the
+        // state afterwards arrived through events while the snapshot loaded.
+        val knownBefore = _state.value.takeIf { it.sessionId == sessionId }
+            ?.messages?.mapTo(HashSet()) { it.info.id }
+            .orEmpty()
         catchingNonCancellation { client.getMessages(sessionId) }
             .onSuccess { messages ->
                 // Duplicate or blank ids would crash the LazyColumn that keys on
@@ -138,14 +155,16 @@ internal class ChatController(
                     .filter { it.info.id.isNotBlank() }
                     .distinctBy { it.info.id }
                     .map { it.toUi() }
-                // Buffered deltas belong to the state being replaced; flushing them
+                // Buffered deltas belong to the state being merged; flushing them
                 // first keeps them from being appended to the fresh snapshot.
-                flushDeltas()
-                _state.update { state -> state.withMessagesIfCurrent(sessionId, ui) }
+                synchronized(deltaLock) {
+                    flushDeltas()
+                    _state.update { state -> state.withMessagesIfCurrent(sessionId, ui, knownBefore) }
+                }
             }
             .onFailure { error ->
                 Log.w(TAG, "load($sessionId) messages failed", error)
-                _state.update { state -> state.withLoadErrorIfCurrent(sessionId, error.message) }
+                _state.update { state -> state.withLoadErrorIfCurrent(sessionId, error.toUiText(R.string.error_load_messages)) }
             }
         catchingNonCancellation { client.todos(sessionId) }
             .onSuccess { todos -> _state.update { state -> state.withTodosIfCurrent(sessionId, todos) } }
@@ -195,6 +214,7 @@ internal class ChatController(
             val request = PromptRequest(
                 model = ready.model,
                 agent = ready.agent,
+                variant = ready.variant,
                 parts = listOf(TextPartInput(type = TEXT_PART_TYPE, text = trimmed)),
             )
             catchingNonCancellation { client.promptAsync(sessionId, request) }
@@ -203,7 +223,7 @@ internal class ChatController(
                     _state.updateIfCurrent(sessionId) { state ->
                         state.withoutMessage(localId).copy(
                             busy = false,
-                            error = error.message ?: "Failed to send prompt",
+                            error = error.toUiText(R.string.error_send_prompt),
                         )
                     }
                 }
@@ -225,14 +245,18 @@ internal class ChatController(
                     // pretending it ended.
                     Log.w(TAG, "abort($sessionId) failed", error)
                     _state.updateIfCurrent(sessionId) { state ->
-                        state.copy(error = error.message ?: "Failed to abort")
+                        state.copy(error = error.toUiText(R.string.error_abort))
                     }
                 }
         }
     }
 
-    fun showError(message: String) {
+    fun showError(message: UiText) {
         _state.update { state -> state.copy(error = message) }
+    }
+
+    fun clearError() {
+        _state.update { state -> state.copy(error = null) }
     }
 
     fun onSessionUpdated(session: Session) {
@@ -255,47 +279,51 @@ internal class ChatController(
         when (type) {
             "message.updated" -> {
                 val info = props.decodeMessage("info") ?: return
-                if (!appliesToCurrentChat(props)) return
+                val target = targetOf(props) ?: return
                 // The envelope of message.updated carries no top-level sessionID,
-                // so appliesToCurrentChat() alone lets every session through. The
-                // message itself names its session: without this check a subagent
-                // run (or another client) injected empty ghost bubbles here.
-                if (info.sessionID.isNotBlank() && info.sessionID != currentSessionId) return
+                // so targetOf() alone lets every session through. The message
+                // itself names its session: without this check a subagent run (or
+                // another client) injected empty ghost bubbles here.
+                if (info.sessionID.isNotBlank() && info.sessionID != target) return
                 noteActivity()
-                _state.update { state -> state.applyMessageUpdate(info) }
+                _state.updateIfCurrent(target) { state -> state.applyMessageUpdate(info) }
             }
 
             "message.removed" -> {
                 val messageId = props.stringOrNull("messageID") ?: return
-                if (!appliesToCurrentChat(props)) return
+                val target = targetOf(props) ?: return
                 noteActivity()
-                _state.update { state -> state.withoutMessage(messageId) }
+                _state.updateIfCurrent(target) { state -> state.withoutMessage(messageId) }
             }
 
             "message.part.updated" -> {
                 val part = props.decodePart("part") ?: return
-                if (!appliesToCurrentChat(props)) return
+                val target = targetOf(props) ?: return
                 noteActivity()
-                // A full part supersedes any buffered deltas: apply them first so
-                // nothing is silently dropped.
-                flushDeltas()
                 // A part that belongs to this exact session but arrives before its
                 // message.updated would otherwise be dropped for good. Parts from
                 // subagent sessions keep being ignored: they belong to a child
                 // session, not to the messages on screen.
-                val ownSession = part.sessionID.isBlank() || part.sessionID == currentSessionId
-                _state.update { state -> state.upsertPart(part, createMissingMessage = ownSession) }
+                val ownSession = part.sessionID.isBlank() || part.sessionID == target
+                // A full part supersedes any buffered deltas: apply them first so
+                // nothing is silently dropped. Under the delta lock, so a timer
+                // flush that already drained the buffer cannot append the same
+                // deltas again on top of this full text.
+                synchronized(deltaLock) {
+                    flushDeltas()
+                    _state.updateIfCurrent(target) { state -> state.upsertPart(part, createMissingMessage = ownSession) }
+                }
             }
 
             "message.part.removed" -> {
                 val partId = props.stringOrNull("partID") ?: return
-                if (!appliesToCurrentChat(props)) return
+                val target = targetOf(props) ?: return
                 noteActivity()
-                _state.update { state -> state.withoutPart(partId) }
+                _state.updateIfCurrent(target) { state -> state.withoutPart(partId) }
             }
 
             "message.part.delta" -> {
-                if (!appliesToCurrentChat(props)) return
+                targetOf(props) ?: return
                 val partId = props.stringOrNull("partID") ?: return
                 val field = props.stringOrNull("field") ?: "text"
                 val delta = props.stringOrNull("delta") ?: return
@@ -312,7 +340,7 @@ internal class ChatController(
             }
 
             "session.status" -> {
-                // Strict equality, not appliesToCurrentChat(): the root session
+                // Strict equality, not targetOf(): the root session
                 // stays busy while its subagents run, so child statuses must not
                 // flip the flag.
                 val sessionId = props.stringOrNull("sessionID") ?: return
@@ -327,9 +355,11 @@ internal class ChatController(
             "session.error" -> handleSessionError(props)
 
             "todo.updated" -> {
-                if (!appliesToCurrentChat(props)) return
+                // Strict: a subagent's own todo list must not replace the chat's.
+                val sessionId = props.stringOrNull("sessionID") ?: currentSessionId ?: return
+                if (sessionId != currentSessionId) return
                 val todos = props.decodeTodos() ?: return
-                _state.update { state -> state.copy(todos = todos) }
+                _state.updateIfCurrent(sessionId) { state -> state.copy(todos = todos) }
             }
         }
     }
@@ -337,21 +367,26 @@ internal class ChatController(
     private fun handleSessionError(props: JsonObject) {
         flushDeltas()
         val error = props.decodeSessionError()
-        val applies = appliesToCurrentChat(props)
+        val target = targetOf(props)
+        // Only an error of the chat's own run ends it. A failed subagent is
+        // reported to its parent as a tool result and the parent keeps running:
+        // dropping busy here replaced Stop with Send in the middle of the run.
+        val sessionId = props.stringOrNull("sessionID")
+        val ownRun = target != null && (sessionId == null || sessionId == target)
         if (error?.name == MESSAGE_ABORTED_ERROR) {
             // Abort is a normal cancellation, not a failure to show.
-            if (applies) {
+            if (ownRun) {
                 statusEpoch.incrementAndGet()
-                _state.update { state -> state.copy(busy = false) }
+                _state.updateIfCurrent(target!!) { state -> state.copy(busy = false) }
             }
             return
         }
         val message = formatSessionError(error, props["error"])
         Log.w(TAG, "session.error: $message")
-        if (applies) {
-            statusEpoch.incrementAndGet()
-            _state.update { state -> state.copy(busy = false, error = message) }
-        } else if (props.stringOrNull("sessionID") == null) {
+        if (target != null) {
+            if (ownRun) statusEpoch.incrementAndGet()
+            _state.updateIfCurrent(target) { state -> state.copy(busy = state.busy && !ownRun, error = message) }
+        } else if (sessionId == null) {
             // Unattributable, but not something to swallow.
             onUnattributedError(message)
         }
@@ -360,11 +395,13 @@ internal class ChatController(
     /**
      * The `sessionID` of several events is optional. Without it an event cannot
      * be attributed precisely, so it applies to whichever chat is currently open.
+     * Returns that chat's id, or null when the event is not for it. Writes are
+     * then scoped to it, so a chat opened in between is never touched.
      */
-    private fun appliesToCurrentChat(props: JsonObject): Boolean {
-        val target = currentSessionId ?: return false
-        val sessionId = props.stringOrNull("sessionID") ?: return true
-        return sessionTree.matches(sessionId, target)
+    private fun targetOf(props: JsonObject): String? {
+        val target = currentSessionId ?: return null
+        val sessionId = props.stringOrNull("sessionID") ?: return target
+        return target.takeIf { sessionTree.matches(sessionId, target) }
     }
 
     // --- Busy watchdog ---
@@ -403,7 +440,7 @@ internal class ChatController(
                 statuses == null -> {
                     Log.w(TAG, "busy watchdog: no events and no status for $sessionId")
                     _state.updateIfCurrent(sessionId) { current ->
-                        current.copy(busy = false, error = "No response from the server; the run may have stalled.")
+                        current.copy(busy = false, error = uiText(R.string.error_run_stalled))
                     }
                     return
                 }
@@ -443,20 +480,22 @@ internal class ChatController(
      * the resulting recompositions) bounded.
      */
     private fun flushDeltas() {
-        val pending: Map<String, String> = synchronized(deltaLock) {
+        // Drained and applied under one lock: applying after releasing it let a
+        // full message.part.updated land in between, and the drained deltas were
+        // then appended a second time on top of the complete text.
+        synchronized(deltaLock) {
             // Released together with the buffer. Leaving it set until the timer
             // coroutine actually finished left a window in which a fresh delta
             // saw "a flush is already scheduled" and was never flushed — losing
             // the tail of a response when no further event followed.
             deltaFlushJob = null
             if (deltaBuffers.isEmpty()) return
-            val drained = LinkedHashMap<String, String>(deltaBuffers.size)
-            deltaBuffers.forEach { (key, buffer) -> if (buffer.isNotEmpty()) drained[key] = buffer.toString() }
+            val pending = LinkedHashMap<String, String>(deltaBuffers.size)
+            deltaBuffers.forEach { (key, buffer) -> if (buffer.isNotEmpty()) pending[key] = buffer.toString() }
             deltaBuffers.clear()
-            drained
+            if (pending.isEmpty()) return
+            _state.update { state -> state.applyDeltas(pending) }
         }
-        if (pending.isEmpty()) return
-        _state.update { state -> state.applyDeltas(pending) }
     }
 
     private companion object {

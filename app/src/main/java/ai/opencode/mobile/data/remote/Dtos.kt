@@ -164,6 +164,8 @@ data class PromptRequest(
     val agent: String? = null,
     @SerialName("noReply") val noReply: Boolean? = null,
     val system: String? = null,
+    /** A key of [Model.variants]; null runs the model with its defaults. */
+    val variant: String? = null,
     val parts: List<TextPartInput> = emptyList(),
 )
 
@@ -238,6 +240,12 @@ data class Model(
     val family: String? = null,
     val status: String? = null,
     val release_date: String? = null,
+    /**
+     * Named presets the server can run the model with, e.g. reasoning effort
+     * `low` … `max`. Keys are the names sent as `variant`; the values are the
+     * provider options they map to and are of no use to the client.
+     */
+    val variants: Map<String, JsonObject> = emptyMap(),
 )
 
 @Serializable
@@ -329,6 +337,17 @@ data class Todo(
 @Serializable
 data class SessionStatusInfo(
     val type: String = "",
+)
+
+/**
+ * One entry of `GET /mcp`, keyed by server name: `connected`, `disabled`,
+ * `failed`, `needs_auth` or `needs_client_registration`; [error] is set for the
+ * failure states.
+ */
+@Serializable
+data class McpStatus(
+    val status: String = "",
+    val error: String? = null,
 )
 
 @Serializable

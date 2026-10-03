@@ -1,15 +1,11 @@
-<!-- opencode mark (homarr dashboard-icons, opencode-dark.svg), 240x300 scaled by
-     0.16 and centred inside the adaptive icon safe zone. -->
+<!-- Themed-icon variant: the frame of the opencode mark only. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#4B4646"
-        android:pathData="M44.4,49.2h19.2v19.2h-19.2z" />
-    <path
-        android:fillColor="#F1ECEC"
+        android:fillColor="#FFFFFF"
         android:fillType="evenOdd"
         android:pathData="M34.8,30h38.4v48h-38.4z M44.4,39.6v28.8h19.2v-28.8z" />
 </vector>

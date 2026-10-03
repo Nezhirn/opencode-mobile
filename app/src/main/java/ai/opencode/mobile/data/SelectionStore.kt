@@ -1,8 +1,10 @@
 package ai.opencode.mobile.data
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.local.ModelSelection
 import ai.opencode.mobile.data.local.SettingsSource
 import ai.opencode.mobile.data.remote.Agent
+import ai.opencode.mobile.data.remote.Model
 import ai.opencode.mobile.data.remote.PromptModel
 import ai.opencode.mobile.data.remote.Provider
 import ai.opencode.mobile.data.remote.ProviderList
@@ -12,9 +14,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -23,8 +28,8 @@ import kotlinx.coroutines.withTimeout
 
 /** Outcome of checking whether a prompt can be sent with the current selection. */
 internal sealed interface SendSelection {
-    data class Ready(val model: PromptModel, val agent: String?) : SendSelection
-    data class Rejected(val message: String) : SendSelection
+    data class Ready(val model: PromptModel, val agent: String?, val variant: String? = null) : SendSelection
+    data class Rejected(val message: UiText) : SendSelection
 }
 
 /**
@@ -58,8 +63,8 @@ internal class SelectionStore(
     val selectedAgent: StateFlow<String?> = _selectedAgent.asStateFlow()
 
     /** Set when a previously chosen model or agent is no longer available on the server. */
-    private val _notice = MutableStateFlow<String?>(null)
-    val notice: StateFlow<String?> = _notice.asStateFlow()
+    private val _notice = MutableStateFlow<UiText?>(null)
+    val notice: StateFlow<UiText?> = _notice.asStateFlow()
 
     /**
      * Models the user wants in the picker ([modelKey]s), or null when the list
@@ -68,6 +73,19 @@ internal class SelectionStore(
      */
     private val _enabledModels = MutableStateFlow<Set<String>?>(null)
     val enabledModels: StateFlow<Set<String>?> = _enabledModels.asStateFlow()
+
+    /** Variant picked per model ([modelKey] -> variant name). */
+    private val variantPicks = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** Variants the selected model offers, in server order; empty when it has none. */
+    val availableVariants: StateFlow<List<String>> = combine(_selectedModel, _providers) { model, providers ->
+        model?.let { providers.variantsOf(it) }.orEmpty()
+    }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** Variant prompts are sent with; null means the model's defaults. */
+    val selectedVariant: StateFlow<String?> = combine(_selectedModel, _providers, variantPicks) { model, providers, picks ->
+        resolveVariant(model, providers, picks)
+    }.stateIn(scope, SharingStarted.Eagerly, null)
 
     @Volatile
     private var serverUrl: String? = null
@@ -85,6 +103,16 @@ internal class SelectionStore(
     /** Completes once the stored pick has been read (or failed to read). */
     private val restored = CompletableDeferred<Unit>()
 
+    /**
+     * Completes once the stored pick of the current server is known: [restored]
+     * on start, a fresh read after switching servers (the pick is kept per
+     * server, so returning to a server brings its model back).
+     */
+    @Volatile
+    private var selectionReady: CompletableDeferred<Unit> = restored
+    private var selectionJob: Job? = null
+    private val selectionWriteLock = Mutex()
+
     fun restore() {
         scope.launch {
             // Restore the explicit pick before providers load; it is validated
@@ -93,6 +121,12 @@ internal class SelectionStore(
             try {
                 // Bounded: a DataStore read that never emits would otherwise hang
                 // applyProviders() forever, leaving the app with no models at all.
+                runCatching {
+                    withTimeout(RESTORE_TIMEOUT_MILLIS) { settingsStore.modelVariants.first() }
+                }.getOrNull()?.let { stored ->
+                    // Picks made while this read was in flight win.
+                    variantPicks.update { picks -> stored + picks }
+                }
                 val stored = runCatching {
                     withTimeout(RESTORE_TIMEOUT_MILLIS) { settingsStore.modelSelection.first() }
                 }.getOrNull() ?: return@launch
@@ -119,7 +153,7 @@ internal class SelectionStore(
         // Never reconcile against a selection that has not been read yet;
         // otherwise the first load would replace the stored pick with the server
         // default and then persist that replacement.
-        restored.await()
+        selectionReady.await()
         val configured = configuredProviders(result)
         _providers.value = configured
         // An empty result while the catalogue itself is non-empty means this
@@ -155,8 +189,8 @@ internal class SelectionStore(
             _selectedModel.value = fallback
             _notice.value = when {
                 current == null -> null
-                fallback != null -> "${current.label} is not configured in opencode; using ${fallback.label}."
-                else -> "${current.label} is not configured in opencode."
+                fallback != null -> uiText(R.string.notice_model_replaced, current.label, fallback.label)
+                else -> uiText(R.string.notice_model_missing, current.label)
             }
             // Only forget the stored pick when a usable replacement exists. Erasing
             // it because the only configured provider happens to be down right now
@@ -176,7 +210,7 @@ internal class SelectionStore(
         val current = _selectedAgent.value ?: return
         if (agents.isNotEmpty() && agents.none { it.name == current }) {
             _selectedAgent.value = null
-            _notice.value = "Agent $current is not available in opencode; using the default agent."
+            _notice.value = uiText(R.string.notice_agent_missing, current)
             updateStoredSelection { it.copy(agent = "") }
         }
     }
@@ -208,6 +242,17 @@ internal class SelectionStore(
         }
     }
 
+    /** Picks the variant for the selected model; null goes back to its defaults. */
+    fun selectVariant(variant: String?) {
+        val model = _selectedModel.value ?: return
+        val key = modelKey(model.providerID, model.modelID)
+        variantPicks.update { picks -> if (variant == null) picks - key else picks + (key to variant) }
+        scope.launch {
+            runCatching { settingsStore.saveModelVariant(key, variant) }
+                .onFailure { Log.w(TAG, "saveModelVariant failed", it) }
+        }
+    }
+
     fun selectAgent(agent: String?) {
         _selectedAgent.value = agent
         updateStoredSelection { it.copy(agent = agent.orEmpty()) }
@@ -223,7 +268,9 @@ internal class SelectionStore(
     fun bindServer(url: String?) {
         synchronized(lock) {
             if (url == serverUrl) return
+            val previous = serverUrl
             serverUrl = url
+            if (previous != null && url != null) reloadSelectionFor(url)
             visibilityJob?.cancel()
             _enabledModels.value = null
             if (url == null) return
@@ -234,6 +281,33 @@ internal class SelectionStore(
                     withTimeout(RESTORE_TIMEOUT_MILLIS) { settingsStore.enabledModels(url).first() }
                 }.getOrNull()
                 if (serverUrl == url) _enabledModels.compareAndSet(null, stored)
+            }
+        }
+    }
+
+    /** Replaces the selection with the one stored for [url]; called under [lock]. */
+    private fun reloadSelectionFor(url: String) {
+        val ready = CompletableDeferred<Unit>()
+        selectionReady = ready
+        selectionJob?.cancel()
+        userPickedModel = false
+        storedSelection = ModelSelection()
+        _selectedModel.value = null
+        _selectedAgent.value = null
+        _notice.value = null
+        selectionJob = scope.launch {
+            try {
+                val stored = runCatching {
+                    withTimeout(RESTORE_TIMEOUT_MILLIS) { settingsStore.modelSelection.first() }
+                }.getOrNull() ?: return@launch
+                synchronized(lock) {
+                    if (serverUrl != url || userPickedModel) return@launch
+                    storedSelection = stored
+                    if (stored.hasModel) _selectedModel.value = PromptModel(stored.providerId, stored.modelId)
+                    if (stored.agent.isNotBlank()) _selectedAgent.value = stored.agent
+                }
+            } finally {
+                ready.complete(Unit)
             }
         }
     }
@@ -291,26 +365,29 @@ internal class SelectionStore(
         if (model == null || model.providerID.isBlank() || model.modelID.isBlank()) {
             // Sending without a valid model is rejected by the server, so surface a
             // clear message instead of a cryptic session.error.
-            return SendSelection.Rejected(
-                "No model selected. Connect a provider in opencode (/connect), then pick a model here.",
-            )
+            return SendSelection.Rejected(uiText(R.string.error_no_model))
         }
         // Enforced only against a list we actually managed to read. A failed or
         // unreadable /provider response must not block a setup that was working a
         // minute ago.
         val configured = _providers.value
         if (_providersLoaded.value && configured.isNotEmpty() && !configured.offers(model)) {
-            return SendSelection.Rejected("${model.label} is not configured in opencode. Pick a configured model.")
+            return SendSelection.Rejected(uiText(R.string.error_model_not_configured, model.label))
         }
-        return SendSelection.Ready(model, _selectedAgent.value)
+        return SendSelection.Ready(model, _selectedAgent.value, resolveVariant(model, configured, variantPicks.value))
     }
 
     /** Serialises read-modify-write on the stored selection and persists the result. */
     private fun updateStoredSelection(transform: (ModelSelection) -> ModelSelection) {
-        val next = synchronized(lock) { transform(storedSelection).also { storedSelection = it } }
+        synchronized(lock) { storedSelection = transform(storedSelection) }
         scope.launch {
-            runCatching { settingsStore.saveModelSelection(next) }
-                .onFailure { Log.w(TAG, "saveModelSelection failed", it) }
+            // Serialised, and always writing the latest value: two quick picks
+            // can never land on disk in the wrong order.
+            selectionWriteLock.withLock {
+                val latest = synchronized(lock) { storedSelection }
+                runCatching { settingsStore.saveModelSelection(latest) }
+                    .onFailure { Log.w(TAG, "saveModelSelection failed", it) }
+            }
         }
     }
 
@@ -351,6 +428,28 @@ internal fun Provider.modelIds(): List<String> =
     models.entries
         .mapNotNull { (key, model) -> key.ifBlank { model.id }.takeIf { it.isNotBlank() } }
         .distinct()
+
+/** The model entry for [modelId]; the map key wins, as in [modelIds]. */
+private fun Provider.model(modelId: String): Model? =
+    models[modelId] ?: models.values.firstOrNull { it.id == modelId }
+
+/** Variant names [model] offers, or null when the model is not in this list. */
+internal fun List<Provider>.variantsOf(model: PromptModel): List<String>? =
+    firstOrNull { it.id == model.providerID }
+        ?.model(model.modelID)
+        ?.variants?.keys?.filter { it.isNotBlank() }
+
+/**
+ * The stored pick for [model] when the model still offers it. While the model
+ * cannot be looked up (providers not loaded) the pick is kept as is: dropping
+ * it would silently send the first prompt after a restart without it.
+ */
+internal fun resolveVariant(model: PromptModel?, providers: List<Provider>, picks: Map<String, String>): String? {
+    if (model == null) return null
+    val pick = picks[modelKey(model.providerID, model.modelID)] ?: return null
+    val offered = providers.variantsOf(model) ?: return pick
+    return pick.takeIf { it in offered }
+}
 
 /** True when [model] is offered by one of these providers. */
 internal fun List<Provider>.offers(model: PromptModel): Boolean =

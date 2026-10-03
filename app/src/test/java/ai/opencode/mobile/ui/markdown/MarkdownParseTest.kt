@@ -88,4 +88,59 @@ class MarkdownParseTest {
     fun blankInputHasNoBlocks() {
         assertTrue(parse("  \n").isEmpty())
     }
+
+    @Test
+    fun onlyWebAndMailLinksAreClickable() {
+        val paragraph = parse("[web](https://a.dev) [local](file:///etc/hosts) [rel](docs/x.md)").single() as MdBlock.Paragraph
+
+        val urls = paragraph.text.getLinkAnnotations(0, paragraph.text.length).map { (it.item as LinkAnnotation.Url).url }
+        assertEquals(listOf("https://a.dev"), urls)
+        assertEquals("web local rel", paragraph.text.text)
+    }
+
+    @Test
+    fun deepQuoteNestingIsCapped() {
+        val paragraph = parse(">".repeat(30) + " deep").single() as MdBlock.Paragraph
+
+        assertEquals("deep", paragraph.text.text)
+        assertTrue(paragraph.quoteDepth <= 8)
+    }
+
+    @Test
+    fun nestingTooDeepForTheParserFallsBackToPlainText() {
+        val source = ">".repeat(20_000) + " deep"
+
+        val blocks = parse(source)
+
+        // One line without breaks: cut hard into bounded pieces, nothing lost.
+        assertEquals(source, blocks.joinToString("") { (it as MdBlock.Paragraph).text.text })
+        assertTrue(blocks.size > 1)
+    }
+
+    @Test
+    fun deepEmphasisNestingKeepsTheText() {
+        val source = "*".repeat(5_000) + "x" + "*".repeat(5_000)
+
+        val paragraph = parse(source).single() as MdBlock.Paragraph
+
+        assertTrue(paragraph.text.text.contains("x"))
+    }
+
+    @Test
+    fun longParagraphIsSplitIntoBoundedBlocks() {
+        val source = (1..2_000).joinToString("\n") { "log line $it" }
+
+        val blocks = parse(source)
+
+        assertTrue(blocks.size > 1)
+        assertTrue(blocks.all { it is MdBlock.Paragraph && it.text.length <= 2_000 && !it.text.text.endsWith("\n") })
+        assertEquals(source, blocks.joinToString("\n") { (it as MdBlock.Paragraph).text.text })
+    }
+
+    @Test
+    fun hugeTableCellIsCapped() {
+        val table = parse("| a |\n|---|\n| ${"x".repeat(20_000)} |").single() as MdBlock.Table
+
+        assertTrue(table.rows.single().single().length <= 501)
+    }
 }

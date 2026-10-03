@@ -162,9 +162,10 @@ private fun ToolCard(part: Part) {
     val status = state?.status ?: "pending"
     val accents = LocalGnomeAccents.current
     val (statusColor, statusLabel) = when (status) {
-        "completed" -> accents.success to "done"
-        "error" -> MaterialTheme.colorScheme.error to "error"
-        "running" -> MaterialTheme.colorScheme.primary to "running"
+        "completed" -> accents.success to stringResource(R.string.tool_status_done)
+        "error" -> MaterialTheme.colorScheme.error to stringResource(R.string.tool_status_error)
+        "running" -> MaterialTheme.colorScheme.primary to stringResource(R.string.tool_status_running)
+        "pending" -> MaterialTheme.colorScheme.onSurfaceVariant to stringResource(R.string.tool_status_pending)
         else -> MaterialTheme.colorScheme.onSurfaceVariant to status
     }
 
@@ -213,16 +214,16 @@ private fun ToolCard(part: Part) {
                     // the costly toString() runs only when the input really changed
                     // (keying on the status left it stale while arguments streamed).
                     MonoBlock(
-                        title = "input",
+                        title = stringResource(R.string.tool_input),
                         text = remember(input) { input.toString() },
                         stateKey = "${part.id}-input",
                     )
                 }
                 state?.output?.let { output ->
-                    MonoBlock(title = "output", text = output, stateKey = "${part.id}-output")
+                    MonoBlock(title = stringResource(R.string.tool_output), text = output, stateKey = "${part.id}-output")
                 }
                 state?.error?.let { error ->
-                    MonoBlock(title = "error", text = error, stateKey = "${part.id}-error")
+                    MonoBlock(title = stringResource(R.string.tool_status_error), text = error, stateKey = "${part.id}-error")
                 }
             }
         }

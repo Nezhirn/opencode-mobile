@@ -12,7 +12,7 @@ sealed interface ConnectionState {
     data object Disconnected : ConnectionState
     data object Connecting : ConnectionState
     data class Connected(val serverName: String?) : ConnectionState
-    data class Error(val message: String) : ConnectionState
+    data class Error(val message: UiText) : ConnectionState
 }
 
 @Immutable
@@ -32,7 +32,7 @@ data class ChatState(
     val todos: List<Todo> = emptyList(),
     val busy: Boolean = false,
     val loading: Boolean = false,
-    val error: String? = null,
+    val error: UiText? = null,
 )
 
 internal const val USER_ROLE = "user"
@@ -133,18 +133,64 @@ internal fun ChatState.withoutPart(partId: String): ChatState {
 }
 
 /**
- * Guards against stale loads: results only apply when the chat still belongs to
- * [sessionId]. Prevents a slow previous session from overwriting a newly opened
- * one. Echoes of prompts still in flight are kept, since the snapshot was taken
- * before the server knew about them.
+ * Applies a loaded snapshot of the chat. Guards against stale loads: results
+ * only apply when the chat still belongs to [sessionId], so a slow previous
+ * session cannot overwrite a newly opened one.
+ *
+ * The snapshot is merged into, not swapped for, the live state, because events
+ * kept arriving while it loaded:
+ * - messages that appeared meanwhile (not in [knownBefore], not in the snapshot)
+ *   are kept — e.g. a prompt sent during the load whose echo the server already
+ *   confirmed; dropping them made the prompt vanish from the screen;
+ * - a part whose live text is longer than the snapshot's keeps the live text,
+ *   so tokens streamed after the snapshot was taken are not cut out;
+ * - an echo is kept only while the snapshot has no matching user message: when
+ *   its `message.updated` was lost in a stream gap, keeping it showed the
+ *   prompt twice, and every later prompt then consumed the wrong echo.
+ * Messages that were known before the load and are missing from the snapshot
+ * were removed on the server and go.
  */
-internal fun ChatState.withMessagesIfCurrent(sessionId: String, messages: List<ChatMessageUi>): ChatState {
+internal fun ChatState.withMessagesIfCurrent(
+    sessionId: String,
+    messages: List<ChatMessageUi>,
+    knownBefore: Set<String> = emptySet(),
+): ChatState {
     if (this.sessionId != sessionId) return this
-    val pendingEchoes = this.messages.filter { it.isLocalEcho }
-    return copy(messages = messages + pendingEchoes, loading = false, error = null)
+    val liveById = this.messages.associateBy { it.info.id }
+    val snapshotIds = messages.mapTo(HashSet()) { it.info.id }
+    val merged = messages.map { snapshot -> liveById[snapshot.info.id]?.let { snapshot.mergedWith(it) } ?: snapshot }
+    // User texts the server has that the live state does not know by id: each
+    // can account for one echo.
+    val unmatchedTexts = messages
+        .filter { it.info.role == USER_ROLE && it.info.id !in liveById }
+        .mapTo(ArrayList()) { it.userText() }
+    val extras = this.messages.filter { message ->
+        when {
+            message.info.id in snapshotIds -> false
+            message.isLocalEcho -> !unmatchedTexts.remove(message.userText())
+            else -> message.info.id !in knownBefore
+        }
+    }
+    return copy(messages = merged + extras, loading = false, error = null)
 }
 
-internal fun ChatState.withLoadErrorIfCurrent(sessionId: String, message: String?): ChatState =
+private fun ChatMessageUi.userText(): String =
+    parts.filter { it.type == TEXT_PART_TYPE && it.synthetic != true }.joinToString("\n") { it.text.orEmpty() }.trim()
+
+/** The snapshot copy of a message, keeping live parts that are ahead of it. */
+private fun ChatMessageUi.mergedWith(live: ChatMessageUi): ChatMessageUi {
+    if (live.parts.isEmpty()) return this
+    val liveParts = live.parts.associateBy { it.id }
+    val parts = parts.map { part ->
+        val livePart = liveParts[part.id]
+        if (livePart != null && (livePart.text?.length ?: 0) > (part.text?.length ?: 0)) livePart else part
+    }
+    val known = parts.mapTo(HashSet()) { it.id }
+    val newer = live.parts.filter { it.id !in known && !it.id.startsWith(LOCAL_ID_PREFIX) }
+    return if (newer.isEmpty()) copy(parts = parts) else copy(parts = parts + newer)
+}
+
+internal fun ChatState.withLoadErrorIfCurrent(sessionId: String, message: UiText): ChatState =
     if (this.sessionId != sessionId) this else copy(loading = false, error = message)
 
 internal fun ChatState.withTodosIfCurrent(sessionId: String, todos: List<Todo>): ChatState =

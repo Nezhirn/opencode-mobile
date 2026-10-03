@@ -5,9 +5,12 @@ import ai.opencode.mobile.data.remote.FileContent
 import ai.opencode.mobile.data.remote.FileNode
 import ai.opencode.mobile.data.remote.VcsFileDiff
 import ai.opencode.mobile.data.remote.VcsFileStatus
+import ai.opencode.mobile.ui.asString
 import ai.opencode.mobile.ui.components.TruncatedText
+import ai.opencode.mobile.ui.components.chunkForDisplay
 import ai.opencode.mobile.ui.components.chunkedForLayout
 import ai.opencode.mobile.ui.components.safePrefix
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -76,18 +79,24 @@ fun FilesScreen(
     val currentPath by viewModel.currentPath.collectAsStateWithLifecycle()
     val openedFile by viewModel.openedFile.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
+    val browsing by viewModel.browsing.collectAsStateWithLifecycle()
+    val vcsLoading by viewModel.vcsLoading.collectAsStateWithLifecycle()
     val actionError by viewModel.actionError.collectAsStateWithLifecycle()
 
-    LaunchedEffect(sessionId) {
-        if (sessionId != null) viewModel.load(sessionId) else viewModel.openDirectory("")
-    }
+    LaunchedEffect(sessionId) { viewModel.load(sessionId) }
 
     var tab by rememberSaveable { mutableIntStateOf(if (sessionId != null) 0 else 1) }
-    val tabs = listOf(
-        stringResource(R.string.files_tab_changes),
-        stringResource(R.string.files_tab_files),
-        stringResource(R.string.files_tab_vcs),
+    // Session changes only exist with a session; without one the tab was always empty.
+    val tabs = listOfNotNull(
+        (0 to stringResource(R.string.files_tab_changes)).takeIf { sessionId != null },
+        1 to stringResource(R.string.files_tab_files),
+        2 to stringResource(R.string.files_tab_vcs),
     )
+
+    // System back climbs out of a subdirectory before it leaves the screen.
+    BackHandler(enabled = tab == 1 && currentPath.isNotBlank()) {
+        viewModel.openDirectory(currentPath.substringBeforeLast('/', ""))
+    }
 
     Scaffold(
         topBar = {
@@ -113,8 +122,8 @@ fun FilesScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            TabRow(selectedTabIndex = tab) {
-                tabs.forEachIndexed { index, title ->
+            TabRow(selectedTabIndex = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0)) {
+                tabs.forEach { (index, title) ->
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title) })
                 }
             }
@@ -128,7 +137,7 @@ fun FilesScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = message,
+                            text = message.asString(),
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier
@@ -155,6 +164,7 @@ fun FilesScreen(
 
                     1 -> FileBrowser(
                         list = files,
+                        loading = browsing,
                         currentPath = currentPath,
                         onOpenDirectory = viewModel::openDirectory,
                         onOpenFile = viewModel::openFile,
@@ -164,6 +174,7 @@ fun FilesScreen(
                         branch = vcsInfo?.branch,
                         status = vcsStatus,
                         diffs = vcsDiff,
+                        loading = vcsLoading,
                     )
                 }
             }
@@ -243,6 +254,7 @@ private fun PatchText(patch: String, stateKey: Any?) {
 @Composable
 private fun FileBrowser(
     list: List<FileNode>,
+    loading: Boolean,
     currentPath: String,
     onOpenDirectory: (String) -> Unit,
     onOpenFile: (String) -> Unit,
@@ -268,7 +280,7 @@ private fun FileBrowser(
             )
         }
         if (list.isEmpty()) {
-            EmptyState(stringResource(R.string.files_empty_dir))
+            if (loading) LoadingState() else EmptyState(stringResource(R.string.files_empty_dir))
         } else {
             val unique = remember(list) { list.distinctBy { it.path } }
             LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -305,7 +317,7 @@ private fun FileBrowser(
 }
 
 @Composable
-private fun VcsView(branch: String?, status: List<VcsFileStatus>, diffs: List<VcsFileDiff>) {
+private fun VcsView(branch: String?, status: List<VcsFileStatus>, diffs: List<VcsFileDiff>, loading: Boolean) {
     // Remembered: rebuilding the list on every recomposition handed the
     // LazyColumn a new list identity each time and forced a full re-layout.
     val display = remember(diffs, status) {
@@ -324,10 +336,17 @@ private fun VcsView(branch: String?, status: List<VcsFileStatus>, diffs: List<Vc
             )
         }
         if (display.isEmpty()) {
-            EmptyState(stringResource(R.string.files_clean_tree))
+            if (loading) LoadingState() else EmptyState(stringResource(R.string.files_clean_tree))
         } else {
             DiffList(diffs = display, loading = false, emptyText = stringResource(R.string.files_clean_tree))
         }
+    }
+}
+
+@Composable
+private fun LoadingState() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
     }
 }
 
@@ -385,7 +404,7 @@ private fun FileViewerDialog(file: FileContent, onClose: () -> Unit) {
                             }
                         }
                         items(chunks.size, key = { index -> index }) { index ->
-                            Text(text = chunks[index], style = mono)
+                            Text(text = chunks[index].chunkForDisplay(), style = mono)
                         }
                     }
                 }

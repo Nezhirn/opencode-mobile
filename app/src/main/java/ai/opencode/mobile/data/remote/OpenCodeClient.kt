@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
@@ -20,7 +21,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Credentials
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -39,6 +42,8 @@ import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Thin HTTP client for the opencode server. Stateless with respect to app
@@ -58,6 +63,7 @@ class OpenCodeClient(
     // Settings changes recreate OpenCodeClient; sharing the OkHttpClient keeps a
     // single connection pool and dispatcher instead of leaking one per instance.
     private val client: OkHttpClient = if (allowInsecureTls) insecureClient else sharedClient
+    private val noRetryClient: OkHttpClient = if (allowInsecureTls) insecureNoRetryClient else sharedNoRetryClient
 
     private val authHeader: String? =
         if (!username.isNullOrBlank() && password != null) {
@@ -100,26 +106,65 @@ class OpenCodeClient(
         return builder.build()
     }
 
+    /** Status line and fully read body of a finished call. */
+    private class HttpResult(val code: Int, val message: String, val isSuccessful: Boolean, val text: String)
+
+    /**
+     * Runs [request] and reads its body so that cancelling the coroutine cancels
+     * the HTTP call, download included. A blocking execute() inside withContext
+     * ignored cancellation: switching servers waited for a hung request of the
+     * old one to time out (up to two minutes), and abandoned loads kept
+     * downloading in the background.
+     */
+    private suspend fun fetch(request: Request): HttpResult {
+        // A POST that already reached the server must not be replayed after a
+        // connection reset: a repeated prompt_async runs the prompt twice.
+        val http = if (request.method == "GET") client else noRetryClient
+        val call = http.newCall(request).apply { applyTimeout(requestTimeoutMillis(request)) }
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(
+                object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        continuation.resumeWithException(e)
+                    }
+
+                    override fun onResponse(call: Call, response: Response) {
+                        // Read on OkHttp's thread: call.cancel() aborts this read.
+                        val result = try {
+                            response.use { HttpResult(it.code, it.message, it.isSuccessful, it.body?.string().orEmpty()) }
+                        } catch (error: IOException) {
+                            continuation.resumeWithException(error)
+                            return
+                        }
+                        continuation.resume(result)
+                    }
+                },
+            )
+        }
+    }
+
     private suspend fun <T> execute(
         request: Request,
         deserializer: DeserializationStrategy<T>,
-    ): T = withContext(Dispatchers.IO) {
-        client.newCall(request).apply { applyTimeout(requestTimeoutMillis(request)) }.execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw OpenCodeException(response.code, extractError(text, response.message))
-            }
-            if (text.isBlank()) {
-                // Some opencode versions answer POST /session (and similar) with
-                // an empty 200 body. Report that explicitly instead of leaking a
-                // ClassCastException from an unchecked cast to T.
-                throw OpenCodeException(
-                    response.code,
-                    "Empty response body for ${request.url.encodedPath}",
-                )
-            }
-            json.decodeFromString(deserializer, text)
+    ): T {
+        val response = fetch(request)
+        val text = response.text
+        if (!response.isSuccessful) {
+            throw OpenCodeException(response.code, extractError(text, response.message))
         }
+        if (text.isBlank()) {
+            // Some opencode versions answer POST /session (and similar) with
+            // an empty 200 body. Report that explicitly instead of leaking a
+            // ClassCastException from an unchecked cast to T.
+            throw OpenCodeException(
+                response.code,
+                "Empty response body for ${request.url.encodedPath}",
+            )
+        }
+        // Large payloads (message history, files) must not be decoded on the
+        // caller's thread, which may be the main one.
+        return withContext(Dispatchers.Default) { json.decodeFromString(deserializer, text) }
     }
 
     private suspend fun executeUnit(
@@ -127,13 +172,11 @@ class OpenCodeClient(
         path: String,
         query: Map<String, String?> = emptyMap(),
         body: RequestBody? = null,
-    ): Unit = withContext(Dispatchers.IO) {
+    ) {
         val request = newRequest(method, path, query, body)
-        client.newCall(request).apply { applyTimeout(requestTimeoutMillis(request)) }.execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw OpenCodeException(response.code, extractError(text, response.message))
-            }
+        val response = fetch(request)
+        if (!response.isSuccessful) {
+            throw OpenCodeException(response.code, extractError(response.text, response.message))
         }
     }
 
@@ -142,6 +185,9 @@ class OpenCodeClient(
 
     private fun extractError(text: String, fallback: String): String {
         if (text.isBlank()) return fallback
+        // A proxy error page (nginx, Cloudflare) is HTML and can be kilobytes
+        // long: it must not end up verbatim in an error banner.
+        val plain = text.takeIf { !it.trimStart().startsWith("<") }?.let(::shortened) ?: fallback.ifBlank { "HTTP error" }
         return runCatching {
             val obj = json.parseToJsonElement(text) as? JsonObject
             // opencode nests the reason in several shapes: {message}, {error},
@@ -153,9 +199,12 @@ class OpenCodeClient(
                 ?: (obj?.get("error") as? JsonObject)?.get("data")
                     ?.let { it as? JsonObject }?.stringOrNull("message")
                 ?: (obj?.get("data") as? JsonObject)?.stringOrNull("message")
-                ?: text
-        }.getOrDefault(text)
+                ?: plain
+        }.getOrDefault(plain).let(::shortened)
     }
+
+    private fun shortened(text: String): String =
+        if (text.length <= MAX_ERROR_CHARS) text else text.take(MAX_ERROR_CHARS) + "…"
 
     private fun jsonBody(value: Any): RequestBody {
         val encoded = when (value) {
@@ -272,6 +321,21 @@ class OpenCodeClient(
             ListSerializer(VcsFileDiff.serializer()),
         )
 
+    /** Status of every MCP server opencode knows about, keyed by name. */
+    suspend fun mcpStatus(): Map<String, McpStatus> =
+        execute(
+            newRequest("GET", "/mcp"),
+            MapSerializer(String.serializer(), McpStatus.serializer()),
+        )
+
+    /** Connects an MCP server until opencode restarts (the config is untouched). */
+    suspend fun mcpConnect(name: String): Boolean =
+        execute(newRequest("POST", "/mcp/${pathSegment(name)}/connect"), Boolean.serializer())
+
+    /** Disconnects an MCP server until opencode restarts (the config is untouched). */
+    suspend fun mcpDisconnect(name: String): Boolean =
+        execute(newRequest("POST", "/mcp/${pathSegment(name)}/disconnect"), Boolean.serializer())
+
     suspend fun todos(sessionId: String): List<Todo> =
         execute(
             newRequest("GET", "/session/$sessionId/todo"),
@@ -287,6 +351,10 @@ class OpenCodeClient(
         val eventClient = if (allowInsecureTls) insecureSseClient else sseClient
         val factory = EventSources.createFactory(eventClient)
         val listener = object : EventSourceListener() {
+            override fun onOpen(eventSource: EventSource, response: Response) {
+                trySend(EventEnvelope(type = STREAM_OPENED_EVENT))
+            }
+
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 runCatching { json.decodeFromString<EventEnvelope>(data) }
                     .onSuccess { envelope ->
@@ -320,12 +388,21 @@ class OpenCodeClient(
 
     companion object {
         private const val TAG = "OpenCodeClient"
+        private const val MAX_ERROR_CHARS = 300
+
+        /**
+         * Synthetic event emitted by [events] once the server accepted the
+         * subscription (response headers received), before any real event.
+         */
+        const val STREAM_OPENED_EVENT = "client.stream.opened"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val EMPTY_BODY: RequestBody = ByteArray(0).toRequestBody(null, 0, 0)
         private val METHODS_REQUIRING_BODY = setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
 
         private val sharedClient: OkHttpClient by lazy { buildBaseClient(insecure = false, logging = true, readTimeoutSeconds = API_READ_TIMEOUT_SECONDS) }
         private val insecureClient: OkHttpClient by lazy { buildBaseClient(insecure = true, logging = true, readTimeoutSeconds = API_READ_TIMEOUT_SECONDS) }
+        private val sharedNoRetryClient: OkHttpClient by lazy { sharedClient.newBuilder().retryOnConnectionFailure(false).build() }
+        private val insecureNoRetryClient: OkHttpClient by lazy { insecureClient.newBuilder().retryOnConnectionFailure(false).build() }
 
         // SSE streams must NOT use BODY logging: HttpLoggingInterceptor reads the
         // whole response body (source.request(Long.MAX_VALUE)) before returning,
@@ -335,6 +412,7 @@ class OpenCodeClient(
         private val insecureSseClient: OkHttpClient by lazy { buildBaseClient(insecure = true, logging = false, readTimeoutSeconds = 0L) }
 
         private const val API_READ_TIMEOUT_SECONDS = 120L
+        private const val MAX_REQUESTS_PER_HOST = 16
 
         /**
          * Builds an OkHttp client. When [insecure] is set, TLS certificate and
@@ -350,6 +428,10 @@ class OpenCodeClient(
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
+                // Calls are enqueued (to be cancellable), which subjects them to
+                // the dispatcher's limit of 5 per host by default; a sync alone
+                // runs more than that in parallel.
+                .dispatcher(Dispatcher().apply { maxRequestsPerHost = MAX_REQUESTS_PER_HOST })
             if (logging && BuildConfig.DEBUG) {
                 // BODY logging is development-only; credentials are redacted and
                 // it is never registered in release builds.
@@ -374,6 +456,14 @@ class OpenCodeClient(
             }
             return builder.build()
         }
+
+        /**
+         * Percent-encodes [value] as a single path segment. MCP names are config
+         * keys chosen by the user, so a '/' or '?' must not change the route.
+         */
+        internal fun pathSegment(value: String): String =
+            HttpUrl.Builder().scheme("http").host("localhost").addPathSegment(value).build()
+                .encodedPathSegments.single()
 
         fun normalizeBaseUrl(input: String): String {
             var value = input.trim()

@@ -17,17 +17,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CopyOnWriteArrayList
 
-/**
- * Events emitted while the stream is down are never replayed. A permission asked
- * during the gap used to stay invisible for good while the run waited for it.
- */
-class EventStreamResyncTest {
+/** The MCP panel against a fake server: statuses load on connect, switches round-trip. */
+class McpRepositoryTest {
 
     private val server = MockWebServer()
-    private val eventStreams = AtomicInteger()
-    private val permissionLoads = AtomicInteger()
+
+    @Volatile
+    private var camoufox = "disabled"
+    private val posts = CopyOnWriteArrayList<String>()
 
     private class FakeSettingsSource(config: ConnectionSettings) : SettingsSource {
         override val settings: Flow<ConnectionSettings> = MutableStateFlow(config)
@@ -45,29 +44,24 @@ class EventStreamResyncTest {
     @Before
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse =
-                when (request.path.orEmpty().substringBefore('?')) {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path.orEmpty().substringBefore('?')
+                if (request.method == "POST") posts += path
+                return when (path) {
                     "/global/health" -> json("""{"healthy":true,"version":"test"}""")
-                    "/session", "/agent", "/question" -> json("[]")
-                    "/provider" -> json("""{"all":[],"default":{},"connected":[]}""")
-                    // Nothing pending at connect time; the request shows up only
-                    // after the (simulated) gap in the event stream.
-                    "/permission" -> json(
-                        if (permissionLoads.incrementAndGet() == 1) {
-                            "[]"
-                        } else {
-                            """[{"id":"per_1","sessionID":"ses_1","permission":"bash"}]"""
-                        },
-                    )
-                    // Each stream delivers one event and ends, like a dropped connection.
-                    "/event" -> {
-                        eventStreams.incrementAndGet()
-                        MockResponse()
-                            .setHeader("Content-Type", "text/event-stream")
-                            .setBody("data: {\"type\":\"server.connected\",\"properties\":{}}\n\n")
+                    "/session", "/agent", "/question", "/permission" -> json("[]")
+                    "/config/providers" -> json("""{"providers":[],"default":{}}""")
+                    "/mcp" -> json("""{"tavily":{"status":"connected"},"camoufox":{"status":"$camoufox"}}""")
+                    "/mcp/camoufox/connect" -> {
+                        camoufox = "connected"
+                        json("true")
                     }
+                    "/event" -> MockResponse()
+                        .setHeader("Content-Type", "text/event-stream")
+                        .setBody("data: {\"type\":\"server.connected\",\"properties\":{}}\n\n")
                     else -> MockResponse().setResponseCode(404)
                 }
+            }
         }
         server.start()
     }
@@ -78,12 +72,19 @@ class EventStreamResyncTest {
     }
 
     @Test
-    fun reconnectReloadsWhatTheGapMissed() = runBlocking {
+    fun loadsStatusesAndConnectsAServer() = runBlocking {
         val repository = AppRepository(FakeSettingsSource(ConnectionSettings(baseUrl = server.url("/").toString())))
 
-        val permissions = withTimeout(15_000) { repository.permissions.first { it.isNotEmpty() } }
+        val initial = withTimeout(15_000) { repository.mcpServers.first { it != null } }!!
+        assertEquals(listOf("camoufox" to "disabled", "tavily" to "connected"), initial.map { it.name to it.status })
 
-        assertEquals("per_1", permissions.single().id)
-        assertTrue(eventStreams.get() >= 2)
+        repository.setMcpEnabled("camoufox", true)
+
+        val updated = withTimeout(15_000) {
+            repository.mcpServers.first { list -> list?.any { it.name == "camoufox" && it.connected } == true }
+        }!!
+        assertTrue(updated.all { it.connected })
+        assertTrue("/mcp/camoufox/connect" in posts)
+        assertTrue(repository.mcpToggling.first { it.isEmpty() }.isEmpty())
     }
 }

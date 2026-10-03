@@ -49,4 +49,14 @@ class PromptRequestSerializationTest {
         assertTrue("modelID missing: $body", body.contains("\"modelID\":\"claude\""))
         assertTrue("agent missing: $body", body.contains("\"agent\":\"build\""))
     }
+
+    @Test
+    fun serializesVariantOnlyWhenPicked() {
+        val parts = listOf(TextPartInput(type = "text", text = "hi"))
+        val withVariant = json.encodeToString(PromptRequest.serializer(), PromptRequest(variant = "high", parts = parts))
+        val without = json.encodeToString(PromptRequest.serializer(), PromptRequest(parts = parts))
+
+        assertTrue("variant missing: $withVariant", withVariant.contains("\"variant\":\"high\""))
+        assertFalse("variant must be omitted when null: $without", without.contains("\"variant\""))
+    }
 }

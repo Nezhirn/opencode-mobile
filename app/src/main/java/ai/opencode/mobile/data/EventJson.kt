@@ -1,5 +1,6 @@
 package ai.opencode.mobile.data
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.remote.Message
 import ai.opencode.mobile.data.remote.OpenCodeJson
 import ai.opencode.mobile.data.remote.Part
@@ -54,15 +55,15 @@ internal fun JsonObject.statusType(): String? = (this["status"] as? JsonObject)?
  * contains `message`; when neither is present the raw JSON is shown instead of
  * swallowing the cause.
  */
-internal fun formatSessionError(info: SessionErrorInfo?, raw: JsonElement?): String {
+internal fun formatSessionError(info: SessionErrorInfo?, raw: JsonElement?): UiText {
     val name = info?.name
     val serverMessage = info?.data?.stringOrNull("message")
     return when {
-        !serverMessage.isNullOrBlank() && !name.isNullOrBlank() -> "$name: $serverMessage"
-        !serverMessage.isNullOrBlank() -> serverMessage
-        !name.isNullOrBlank() -> name
-        raw != null -> raw.toString()
-        else -> "Session error"
+        !serverMessage.isNullOrBlank() && !name.isNullOrBlank() -> UiText.Raw("$name: $serverMessage")
+        !serverMessage.isNullOrBlank() -> UiText.Raw(serverMessage)
+        !name.isNullOrBlank() -> UiText.Raw(name)
+        raw != null -> UiText.Raw(raw.toString())
+        else -> uiText(R.string.error_session)
     }
 }
 

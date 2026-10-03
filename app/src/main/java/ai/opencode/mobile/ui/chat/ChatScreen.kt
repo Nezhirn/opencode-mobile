@@ -3,7 +3,10 @@ package ai.opencode.mobile.ui.chat
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ChatMessageUi
 import ai.opencode.mobile.data.ChatState
+import ai.opencode.mobile.ui.asString
 import ai.opencode.mobile.ui.components.TruncatedText
+import ai.opencode.mobile.ui.mcp.McpButton
+import ai.opencode.mobile.ui.mcp.McpSheet
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -49,12 +53,15 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,13 +81,17 @@ fun ChatScreen(
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
     val selectedAgent by viewModel.selectedAgent.collectAsStateWithLifecycle()
+    val availableVariants by viewModel.availableVariants.collectAsStateWithLifecycle()
+    val selectedVariant by viewModel.selectedVariant.collectAsStateWithLifecycle()
     val modelNotice by viewModel.modelNotice.collectAsStateWithLifecycle()
     val enabledModels by viewModel.enabledModels.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
+    val mcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) { viewModel.open(sessionId) }
     var showModelSheet by rememberSaveable { mutableStateOf(false) }
     var showManageModels by rememberSaveable { mutableStateOf(false) }
+    var showMcp by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -102,7 +113,8 @@ fun ChatScreen(
                             stringResource(R.string.chat_model_subtitle, model.providerID, model.modelID)
                         }
                         Text(
-                            text = modelLabel + (selectedAgent?.let { " · $it" } ?: ""),
+                            text = listOfNotNull(modelLabel, selectedVariant?.let(::variantLabel), selectedAgent)
+                                .joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (model == null) {
                                 MaterialTheme.colorScheme.error
@@ -123,6 +135,7 @@ fun ChatScreen(
                     IconButton(onClick = { showModelSheet = true }) {
                         Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.chat_model_and_agent))
                     }
+                    McpButton(servers = mcpServers, onClick = { showMcp = true })
                     IconButton(onClick = { onOpenFiles(sessionId) }) {
                         Icon(Icons.Filled.Folder, contentDescription = stringResource(R.string.sessions_open_files))
                     }
@@ -131,10 +144,20 @@ fun ChatScreen(
         },
     ) { padding ->
         // Measured inside imePadding, so the budget shrinks while the keyboard is
-        // open. A fixed 260dp panel left the message list a sliver there.
-        BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding).imePadding()) {
+        // open. A fixed 260dp panel left the message list a sliver there. The
+        // Scaffold padding already holds the navigation bar, which the IME inset
+        // covers too: consumed here, or the bar was counted twice above the
+        // keyboard.
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
+        ) {
+            val density = LocalDensity.current
+            // The input bar is measured after the panels and got whatever they
+            // left; the budget is what remains once it has its own height.
+            var inputBarHeight by remember { mutableStateOf(0.dp) }
             val panelCount = (if (questions.isNotEmpty()) 1 else 0) + (if (permissions.isNotEmpty()) 1 else 0)
-            val panelMaxHeight = minOf(maxHeight * PANEL_SCREEN_FRACTION, PANEL_MAX_HEIGHT) / panelCount.coerceAtLeast(1)
+            val panelBudget = (maxHeight - inputBarHeight).coerceAtLeast(0.dp)
+            val panelMaxHeight = minOf(panelBudget * PANEL_SCREEN_FRACTION, PANEL_MAX_HEIGHT) / panelCount.coerceAtLeast(1)
             Column(modifier = Modifier.fillMaxSize()) {
                 if (chat.todos.isNotEmpty()) {
                     TodoStrip(chat.todos)
@@ -171,7 +194,7 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = notice,
+                            text = notice.asString(),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
@@ -183,12 +206,22 @@ fun ChatScreen(
                 }
 
                 chat.error?.let { error ->
-                    Text(
-                        text = error,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = error.asString(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = viewModel::clearError) {
+                            Text(stringResource(R.string.action_dismiss))
+                        }
+                    }
                 }
 
                 InputBar(
@@ -197,6 +230,10 @@ fun ChatScreen(
                     busy = chat.busy,
                     onSend = viewModel::send,
                     onStop = viewModel::abort,
+                    variants = availableVariants,
+                    selectedVariant = selectedVariant,
+                    onSelectVariant = viewModel::selectVariant,
+                    modifier = Modifier.onSizeChanged { size -> inputBarHeight = with(density) { size.height.toDp() } },
                 )
             }
         }
@@ -223,6 +260,20 @@ fun ChatScreen(
                 showModelSheet = false
                 showManageModels = true
             },
+        )
+    }
+
+    if (showMcp) {
+        val mcpToggling by viewModel.mcpToggling.collectAsStateWithLifecycle()
+        val mcpError by viewModel.mcpError.collectAsStateWithLifecycle()
+        McpSheet(
+            servers = mcpServers,
+            toggling = mcpToggling,
+            error = mcpError,
+            onOpen = viewModel::refreshMcp,
+            onToggle = viewModel::setMcpEnabled,
+            onDismissError = viewModel::clearMcpError,
+            onDismiss = { showMcp = false },
         )
     }
 
@@ -264,8 +315,21 @@ private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
     var follow by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }
+            // The first value is the current state, not the end of a scroll:
+            // evaluated against a list not laid out yet it reset a restored
+            // "not following" and yanked the user back to the end.
+            .drop(1)
             .filter { scrolling -> !scrolling }
             .collect { follow = listState.isAtBottom(tolerancePx) }
+    }
+    // The list also loses room without new content: the keyboard opens, a
+    // permission panel appears. Keep the end in view then too, or the card the
+    // panel asks about slides under it.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo.viewportSize.height }
+            .distinctUntilChanged()
+            .drop(1)
+            .collect { if (follow && !listState.isScrollInProgress) listState.scrollToEnd() }
     }
 
     // Growth also happens in tool output and in new parts, not just in `text`:
@@ -314,7 +378,7 @@ private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(chat.messages, key = { it.info.id }) { message ->
+        items(chat.messages, key = { it.info.id }, contentType = { it.info.role }) { message ->
             MessageItem(message)
         }
     }

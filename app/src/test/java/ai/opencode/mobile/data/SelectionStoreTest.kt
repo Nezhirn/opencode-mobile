@@ -1,5 +1,6 @@
 package ai.opencode.mobile.data
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.local.ConnectionSettings
 import ai.opencode.mobile.data.local.ModelSelection
 import ai.opencode.mobile.data.local.SettingsSource
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -36,6 +38,12 @@ class SelectionStoreTest {
         override fun enabledModels(serverUrl: String): Flow<Set<String>?> = enabled.map { it[serverUrl] }
         override suspend fun saveEnabledModels(serverUrl: String, models: Set<String>?) {
             enabled.value = enabled.value + (serverUrl to models)
+        }
+
+        val variants = MutableStateFlow<Map<String, String>>(emptyMap())
+        override val modelVariants: Flow<Map<String, String>> = variants
+        override suspend fun saveModelVariant(modelKey: String, variant: String?) {
+            variants.value = if (variant == null) variants.value - modelKey else variants.value + (modelKey to variant)
         }
     }
 
@@ -68,7 +76,9 @@ class SelectionStoreTest {
         store.applyAgents(listOf(Agent(name = "build"), Agent(name = "plan")))
 
         assertNull(store.selectedAgent.value)
-        assertTrue(store.notice.value.orEmpty().contains("reviewer"))
+        val notice = store.notice.value as UiText.Res
+        assertEquals(R.string.notice_agent_missing, notice.id)
+        assertEquals(listOf("reviewer"), notice.args)
     }
 
     @Test
@@ -159,5 +169,80 @@ class SelectionStoreTest {
 
         assertNull(other.enabledModels.value)
         assertEquals(setOf("runware/glm"), connectedStore("http://a").enabledModels.value)
+    }
+
+    /** A store whose only provider offers a reasoning model and a plain one. */
+    private fun reasoningStore() = store().apply {
+        restore()
+        runBlocking {
+            applyProviders(
+                ProviderList(
+                    all = listOf(
+                        Provider(
+                            id = "openrouter",
+                            models = mapOf(
+                                "claude" to Model(
+                                    id = "claude",
+                                    variants = listOf("low", "high", "max").associateWith { JsonObject(emptyMap()) },
+                                ),
+                                "plain" to Model(id = "plain"),
+                            ),
+                        ),
+                    ),
+                    connected = listOf("openrouter"),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun variantsFollowTheSelectedModel() {
+        val store = reasoningStore()
+
+        store.selectModel(PromptModel("openrouter", "claude"))
+        assertEquals(listOf("low", "high", "max"), store.availableVariants.value)
+
+        store.selectModel(PromptModel("openrouter", "plain"))
+        assertEquals(emptyList<String>(), store.availableVariants.value)
+    }
+
+    @Test
+    fun variantIsRememberedPerModelAndSent() {
+        val store = reasoningStore()
+        store.selectModel(PromptModel("openrouter", "claude"))
+
+        store.selectVariant("high")
+        store.selectModel(PromptModel("openrouter", "plain"))
+        assertNull(store.selectedVariant.value)
+        assertNull((store.checkSendable() as SendSelection.Ready).variant)
+
+        store.selectModel(PromptModel("openrouter", "claude"))
+        assertEquals("high", store.selectedVariant.value)
+        assertEquals("high", (store.checkSendable() as SendSelection.Ready).variant)
+        assertEquals(mapOf("openrouter/claude" to "high"), settings.variants.value)
+    }
+
+    @Test
+    fun defaultVariantForgetsThePick() {
+        val store = reasoningStore()
+        store.selectModel(PromptModel("openrouter", "claude"))
+        store.selectVariant("max")
+
+        store.selectVariant(null)
+
+        assertNull(store.selectedVariant.value)
+        assertEquals(emptyMap<String, String>(), settings.variants.value)
+    }
+
+    @Test
+    fun storedVariantIsRestoredButDroppedWhenTheModelNoLongerOffersIt() {
+        settings.variants.value = mapOf("openrouter/claude" to "high", "openrouter/plain" to "high")
+        val store = reasoningStore()
+
+        store.selectModel(PromptModel("openrouter", "claude"))
+        assertEquals("high", store.selectedVariant.value)
+
+        store.selectModel(PromptModel("openrouter", "plain"))
+        assertNull(store.selectedVariant.value)
     }
 }

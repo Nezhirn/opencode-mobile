@@ -60,4 +60,25 @@ class DtoParsingTest {
         assertNotNull(message.parts.single().text)
         assertEquals("hi", message.parts.single().text)
     }
+
+    @Test
+    fun parsesModelVariantsInServerOrder() {
+        val raw = """
+            {"id":"anthropic/claude-sonnet-4.6","providerID":"openrouter","name":"Claude Sonnet 4.6",
+             "capabilities":{"reasoning":true},
+             "variants":{"low":{"reasoning":{"effort":"low"}},"medium":{"reasoning":{"effort":"medium"}},
+                         "high":{"reasoning":{"effort":"high"}},"max":{"reasoning":{"effort":"max"}}}}
+        """.trimIndent()
+
+        val model = OpenCodeJson.decodeFromString(Model.serializer(), raw)
+
+        assertEquals(listOf("low", "medium", "high", "max"), model.variants.keys.toList())
+    }
+
+    @Test
+    fun modelWithoutVariantsHasNone() {
+        val model = OpenCodeJson.decodeFromString(Model.serializer(), """{"id":"m","variants":{}}""")
+
+        assertEquals(emptyMap<String, Any>(), model.variants)
+    }
 }

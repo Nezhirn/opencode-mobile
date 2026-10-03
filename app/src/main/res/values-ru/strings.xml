@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenCode</string>
+
+    <!-- Connect -->
+    <string name="connect_subtitle">Подключение к запущенному серверу opencode</string>
+    <string name="connect_server_url">Адрес сервера</string>
+    <string name="connect_server_url_hint">http://192.168.1.10:4096</string>
+    <string name="connect_username">Имя пользователя</string>
+    <string name="connect_password">Пароль</string>
+    <string name="connect_insecure_tls">Разрешить небезопасный TLS</string>
+    <string name="connect_insecure_tls_warning">Доверять самоподписанным сертификатам. Это риск для безопасности — включайте только для своего локального HTTPS-сервера.</string>
+    <string name="connect_connect">Подключиться</string>
+    <string name="connect_connecting">Подключение…</string>
+    <string name="connect_connected">Подключено</string>
+    <string name="connect_connected_version">Подключено · opencode %1$s</string>
+    <string name="connect_not_connected">Нет подключения</string>
+
+    <!-- Sessions -->
+    <string name="sessions_title">Сессии</string>
+    <string name="sessions_refresh">Обновить</string>
+    <string name="sessions_open_files">Файлы и изменения</string>
+    <string name="sessions_settings">Настройки подключения</string>
+    <string name="sessions_new">Новая сессия</string>
+    <string name="sessions_search">Поиск сессий</string>
+    <string name="sessions_empty">Сессий пока нет. Нажмите +, чтобы начать.</string>
+    <string name="sessions_no_match">Ничего не найдено.</string>
+    <string name="sessions_delete">Удалить сессию</string>
+    <plurals name="sessions_pending_permissions">
+        <item quantity="one">%1$d запрос разрешения</item>
+        <item quantity="few">%1$d запроса разрешения</item>
+        <item quantity="many">%1$d запросов разрешения</item>
+        <item quantity="other">%1$d запроса разрешения</item>
+    </plurals>
+    <plurals name="sessions_pending_questions">
+        <item quantity="one">%1$d вопрос</item>
+        <item quantity="few">%1$d вопроса</item>
+        <item quantity="many">%1$d вопросов</item>
+        <item quantity="other">%1$d вопроса</item>
+    </plurals>
+    <string name="sessions_delete_title">Удалить сессию?</string>
+    <string name="sessions_delete_message">«%1$s» и вся её история будут удалены на сервере. Это действие нельзя отменить.</string>
+    <string name="sessions_delete_confirm">Удалить</string>
+    <string name="action_dismiss">Закрыть</string>
+    <string name="action_cancel">Отмена</string>
+
+    <!-- Chat -->
+    <string name="chat_title">Чат</string>
+    <string name="chat_no_model">Модель не выбрана — нажмите, чтобы выбрать</string>
+    <string name="chat_model_subtitle">%1$s/%2$s</string>
+    <string name="chat_back">Назад</string>
+    <string name="chat_model_and_agent">Модель и агент</string>
+    <string name="chat_input_hint">Сообщение для opencode</string>
+    <string name="chat_send">Отправить</string>
+    <string name="chat_stop">Остановить</string>
+    <string name="chat_thinking">Размышления</string>
+    <string name="chat_retrying">Повтор (попытка %1$d)…</string>
+    <string name="chat_context_compacted">контекст сжат</string>
+    <string name="chat_step">шаг</string>
+    <string name="chat_subtask">Подзадача: %1$s</string>
+    <string name="chat_agent">Агент: %1$s</string>
+    <string name="chat_permission">Разрешение: %1$s</string>
+    <string name="chat_allow_once">Разрешить один раз</string>
+    <string name="chat_question">Вопрос</string>
+    <string name="chat_custom_answer">Свой ответ</string>
+    <string name="chat_always">Всегда</string>
+    <string name="chat_reject">Отклонить</string>
+    <string name="chat_changed_files">Изменено: %1$s</string>
+    <string name="chat_empty">Отправьте сообщение, чтобы начать сессию.</string>
+
+    <!-- Long text -->
+    <string name="text_show_all">Показать всё</string>
+    <string name="text_show_less">Свернуть</string>
+
+    <!-- Model sheet -->
+    <string name="models_title">Модель</string>
+    <string name="models_search">Поиск моделей</string>
+    <string name="models_selected">Выбрано</string>
+    <string name="models_configured_hint">Показаны только провайдеры, подключённые в opencode.</string>
+    <string name="models_none_configured">В opencode не подключено ни одного провайдера. Выполните /connect на сервере и нажмите «Обновить».</string>
+    <string name="models_loading">Загрузка моделей…</string>
+    <string name="models_no_match">Нет моделей, подходящих под запрос.</string>
+    <string name="models_none_enabled">Все модели скрыты. Откройте «Управление моделями», чтобы включить нужные.</string>
+    <string name="models_manage">Управление моделями</string>
+    <string name="models_manage_hint">Выберите, какие модели показывать в списке. Скрытые модели остаются доступны в opencode — их можно включить здесь в любой момент.</string>
+    <string name="models_show_all">Показать все</string>
+    <string name="models_enabled_count">Показано %1$d из %2$d</string>
+    <string name="agents_title">Агент</string>
+    <string name="agents_default">По умолчанию</string>
+
+    <!-- Files -->
+    <string name="files_title">Файлы и изменения</string>
+    <string name="files_tab_changes">Изменения</string>
+    <string name="files_tab_files">Файлы</string>
+    <string name="files_tab_vcs">VCS</string>
+    <string name="files_no_changes">В этой сессии нет изменений</string>
+    <string name="files_empty_dir">Пустая папка</string>
+    <string name="files_clean_tree">Рабочее дерево чистое</string>
+    <string name="files_on_branch">Ветка %1$s</string>
+    <string name="files_up">Вверх</string>
+    <string name="files_file">Файл</string>
+    <string name="files_close">Закрыть</string>
+    <string name="files_binary">(двоичный файл)</string>
+    <plurals name="files_show_more">
+        <item quantity="one">Показать ещё %1$d символ</item>
+        <item quantity="few">Показать ещё %1$d символа</item>
+        <item quantity="many">Показать ещё %1$d символов</item>
+        <item quantity="other">Показать ещё %1$d символа</item>
+    </plurals>
+    <plurals name="text_truncated">
+        <item quantity="one">Текст слишком длинный, чтобы показать его целиком; показан первый %1$d символ.</item>
+        <item quantity="few">Текст слишком длинный, чтобы показать его целиком; показаны первые %1$d символа.</item>
+        <item quantity="many">Текст слишком длинный, чтобы показать его целиком; показаны первые %1$d символов.</item>
+        <item quantity="other">Текст слишком длинный, чтобы показать его целиком; показаны первые %1$d символа.</item>
+    </plurals>
+    <string name="files_too_large">Файл слишком большой, чтобы показать его целиком; показаны первые %1$d символов.</string>
+
+    <!-- Tool calls -->
+    <string name="tool_status_done">готово</string>
+    <string name="tool_status_error">ошибка</string>
+    <string name="tool_status_running">выполняется</string>
+    <string name="tool_status_pending">ожидание</string>
+    <string name="tool_input">ввод</string>
+    <string name="tool_output">вывод</string>
+
+    <!-- Reasoning effort (model variants) -->
+    <string name="variant_title">Усилие мышления</string>
+    <string name="variant_default">По умолчанию</string>
+
+    <!-- MCP servers -->
+    <string name="mcp_title">MCP-серверы</string>
+    <string name="mcp_hint">Переключатель подключает или отключает сервер до перезапуска opencode.</string>
+    <string name="mcp_empty">В opencode не настроено ни одного MCP-сервера.</string>
+    <string name="mcp_loading">Загрузка MCP-серверов…</string>
+    <string name="mcp_status_connected">Подключён</string>
+    <string name="mcp_status_disabled">Отключён</string>
+    <string name="mcp_status_failed">Ошибка</string>
+    <string name="mcp_status_needs_auth">Нужна авторизация</string>
+    <string name="mcp_status_needs_client_registration">Нужна регистрация клиента</string>
+
+    <!-- Language -->
+    <string name="settings_language">Язык</string>
+
+    <!-- Errors and notices -->
+    <string name="error_session">Ошибка сессии</string>
+    <string name="error_connection">Не удалось подключиться</string>
+    <string name="error_event_stream">Поток событий прервался</string>
+    <string name="error_stream_silent">Сервер не присылал событий %1$d с; переподключение</string>
+    <string name="error_create_session">Не удалось создать сессию</string>
+    <string name="error_delete_session">Не удалось удалить сессию</string>
+    <string name="error_load_messages">Не удалось загрузить сообщения</string>
+    <string name="error_load_sessions">Не удалось загрузить сессии</string>
+    <string name="error_send_prompt">Не удалось отправить сообщение</string>
+    <string name="error_abort">Не удалось остановить</string>
+    <string name="error_run_stalled">Сервер не отвечает; возможно, выполнение зависло.</string>
+    <string name="error_reply_permission">Не удалось ответить на запрос разрешения</string>
+    <string name="error_reply_question">Не удалось ответить на вопрос</string>
+    <string name="error_reject_question">Не удалось отклонить вопрос</string>
+    <string name="error_list_files">Не удалось получить список файлов</string>
+    <string name="error_open_file">Не удалось открыть файл</string>
+    <string name="error_vcs_info">Не удалось загрузить данные VCS</string>
+    <string name="error_vcs_status">Не удалось загрузить статус VCS</string>
+    <string name="error_diff">Не удалось загрузить diff</string>
+    <string name="error_session_diff">Не удалось загрузить изменения сессии</string>
+    <string name="error_save_settings">Не удалось сохранить настройки</string>
+    <string name="error_mcp_status">Не удалось загрузить MCP-серверы</string>
+    <string name="error_mcp_toggle">Не удалось переключить %1$s</string>
+    <string name="error_no_model">Модель не выбрана. Подключите провайдера в opencode (/connect), затем выберите модель здесь.</string>
+    <string name="error_model_not_configured">%1$s не настроена в opencode. Выберите настроенную модель.</string>
+    <string name="notice_model_replaced">%1$s не настроена в opencode; используется %2$s.</string>
+    <string name="notice_model_missing">%1$s не настроена в opencode.</string>
+    <string name="notice_agent_missing">Агент %1$s недоступен в opencode; используется агент по умолчанию.</string>
+</resources>

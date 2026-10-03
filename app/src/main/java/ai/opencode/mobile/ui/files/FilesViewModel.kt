@@ -42,11 +42,20 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
     private val _loading = MutableStateFlow(false)
     val loading = _loading.asStateFlow()
 
+    /** True while a directory listing is on its way. */
+    private val _browsing = MutableStateFlow(false)
+    val browsing = _browsing.asStateFlow()
+
+    /** True while the VCS tab is loading. */
+    private val _vcsLoading = MutableStateFlow(false)
+    val vcsLoading = _vcsLoading.asStateFlow()
+
     val actionError = repository.actionError
 
     fun clearActionError() = repository.clearActionError()
 
     private var sessionId: String? = null
+    private var initialized = false
 
     // One job per concern. Without them a slow request could land after a newer
     // one (stale file list for the wrong directory) or a repeated tap could run
@@ -56,8 +65,14 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
     private var browseJob: Job? = null
     private var openFileJob: Job? = null
 
-    fun load(sessionId: String) {
-        if (this.sessionId == sessionId) return
+    /**
+     * Loads the screen once per ViewModel. Without a session there is no diff
+     * to show, but the VCS tab still needs loading (it used to claim a clean
+     * tree), and an activity recreation must not reset the browsed directory.
+     */
+    fun load(sessionId: String?) {
+        if (initialized && this.sessionId == sessionId) return
+        initialized = true
         this.sessionId = sessionId
         refreshSessionDiff()
         loadVcs()
@@ -67,9 +82,14 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
     fun loadVcs() {
         if (vcsJob?.isActive == true) return
         vcsJob = viewModelScope.launch {
-            _vcsInfo.value = repository.vcsInfo()
-            _vcsStatus.value = repository.vcsStatus()
-            _vcsDiff.value = runCatching { repository.vcsDiff("git") }.getOrDefault(emptyList())
+            _vcsLoading.value = true
+            try {
+                _vcsInfo.value = repository.vcsInfo()
+                _vcsStatus.value = repository.vcsStatus()
+                _vcsDiff.value = repository.vcsDiff("git")
+            } finally {
+                _vcsLoading.value = false
+            }
         }
     }
 
@@ -90,9 +110,16 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
     fun openDirectory(path: String) {
         browseJob?.cancel()
         browseJob = viewModelScope.launch {
-            val nodes = repository.listFiles(path)
-            _currentPath.value = path
-            _files.value = nodes
+            _browsing.value = true
+            try {
+                // On failure stay where we were: showing the old path with an
+                // empty list read as "this directory is empty".
+                val nodes = repository.listFiles(path) ?: return@launch
+                _currentPath.value = path
+                _files.value = nodes
+            } finally {
+                _browsing.value = false
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 package ai.opencode.mobile.data
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.remote.SessionErrorInfo
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -16,21 +17,21 @@ class SessionErrorFormattingTest {
             data = buildJsonObject { put("message", "bad key") },
         )
 
-        assertEquals("ProviderAuthError: bad key", formatSessionError(info, null))
+        assertEquals(UiText.Raw("ProviderAuthError: bad key"), formatSessionError(info, null))
     }
 
     @Test
     fun fallsBackToNameOnly() {
-        assertEquals("UnknownError", formatSessionError(SessionErrorInfo(name = "UnknownError"), null))
+        assertEquals(UiText.Raw("UnknownError"), formatSessionError(SessionErrorInfo(name = "UnknownError"), null))
     }
 
     @Test
     fun fallsBackToRawPayload() {
-        assertEquals("\"oops\"", formatSessionError(null, JsonPrimitive("oops")))
+        assertEquals(UiText.Raw("\"oops\""), formatSessionError(null, JsonPrimitive("oops")))
     }
 
     @Test
     fun defaultMessageWhenNothingIsAvailable() {
-        assertEquals("Session error", formatSessionError(null, null))
+        assertEquals(UiText.Res(R.string.error_session), formatSessionError(null, null))
     }
 }

@@ -34,4 +34,11 @@ interface SettingsSource {
      */
     fun enabledModels(serverUrl: String): Flow<Set<String>?>
     suspend fun saveEnabledModels(serverUrl: String, models: Set<String>?)
+
+    /**
+     * Variant (reasoning effort) picked per model, keyed "providerId/modelId".
+     * Models without an entry run with their defaults.
+     */
+    val modelVariants: Flow<Map<String, String>>
+    suspend fun saveModelVariant(modelKey: String, variant: String?)
 }

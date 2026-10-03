@@ -24,6 +24,7 @@
     <string name="sessions_new">New session</string>
     <string name="sessions_search">Search sessions</string>
     <string name="sessions_empty">No sessions yet. Tap + to start one.</string>
+    <string name="sessions_no_match">No sessions match the search.</string>
     <string name="sessions_delete">Delete session</string>
     <plurals name="sessions_pending_permissions">
         <item quantity="one">%1$d pending permission</item>
@@ -100,5 +101,65 @@
         <item quantity="one">Show %1$d more character</item>
         <item quantity="other">Show %1$d more characters</item>
     </plurals>
+    <plurals name="text_truncated">
+        <item quantity="one">Too long to show in full; showing the first %1$d character.</item>
+        <item quantity="other">Too long to show in full; showing the first %1$d characters.</item>
+    </plurals>
     <string name="files_too_large">File is too large to display in full; showing the first %1$d characters.</string>
+
+    <!-- Tool calls -->
+    <string name="tool_status_done">done</string>
+    <string name="tool_status_error">error</string>
+    <string name="tool_status_running">running</string>
+    <string name="tool_status_pending">pending</string>
+    <string name="tool_input">input</string>
+    <string name="tool_output">output</string>
+
+    <!-- Reasoning effort (model variants) -->
+    <string name="variant_title">Reasoning effort</string>
+    <string name="variant_default">Default</string>
+
+    <!-- MCP servers -->
+    <string name="mcp_title">MCP servers</string>
+    <string name="mcp_hint">Switching connects or disconnects a server until opencode restarts.</string>
+    <string name="mcp_empty">No MCP servers are configured in opencode.</string>
+    <string name="mcp_loading">Loading MCP servers…</string>
+    <string name="mcp_status_connected">Connected</string>
+    <string name="mcp_status_disabled">Disabled</string>
+    <string name="mcp_status_failed">Failed</string>
+    <string name="mcp_status_needs_auth">Needs authorization</string>
+    <string name="mcp_status_needs_client_registration">Needs client registration</string>
+
+    <!-- Language -->
+    <string name="settings_language">Language</string>
+
+    <!-- Errors and notices -->
+    <string name="error_session">Session error</string>
+    <string name="error_connection">Connection failed</string>
+    <string name="error_event_stream">Event stream failed</string>
+    <string name="error_stream_silent">No events from the server for %1$d s; reconnecting</string>
+    <string name="error_create_session">Failed to create session</string>
+    <string name="error_delete_session">Failed to delete session</string>
+    <string name="error_load_messages">Failed to load messages</string>
+    <string name="error_load_sessions">Failed to load sessions</string>
+    <string name="error_send_prompt">Failed to send prompt</string>
+    <string name="error_abort">Failed to abort</string>
+    <string name="error_run_stalled">No response from the server; the run may have stalled.</string>
+    <string name="error_reply_permission">Failed to reply to permission</string>
+    <string name="error_reply_question">Failed to reply to question</string>
+    <string name="error_reject_question">Failed to reject question</string>
+    <string name="error_list_files">Failed to list files</string>
+    <string name="error_open_file">Failed to open file</string>
+    <string name="error_vcs_info">Failed to load VCS info</string>
+    <string name="error_vcs_status">Failed to load VCS status</string>
+    <string name="error_diff">Failed to load diff</string>
+    <string name="error_session_diff">Failed to load session changes</string>
+    <string name="error_save_settings">Failed to save settings</string>
+    <string name="error_mcp_status">Failed to load MCP servers</string>
+    <string name="error_mcp_toggle">Failed to switch %1$s</string>
+    <string name="error_no_model">No model selected. Connect a provider in opencode (/connect), then pick a model here.</string>
+    <string name="error_model_not_configured">%1$s is not configured in opencode. Pick a configured model.</string>
+    <string name="notice_model_replaced">%1$s is not configured in opencode; using %2$s.</string>
+    <string name="notice_model_missing">%1$s is not configured in opencode.</string>
+    <string name="notice_agent_missing">Agent %1$s is not available in opencode; using the default agent.</string>
 </resources>

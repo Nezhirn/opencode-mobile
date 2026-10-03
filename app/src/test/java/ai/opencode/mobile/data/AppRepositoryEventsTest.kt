@@ -47,6 +47,8 @@ class AppRepositoryEventsTest {
 
         override fun enabledModels(serverUrl: String): Flow<Set<String>?> = MutableStateFlow(null)
         override suspend fun saveEnabledModels(serverUrl: String, models: Set<String>?) = Unit
+        override val modelVariants: Flow<Map<String, String>> = MutableStateFlow(emptyMap())
+        override suspend fun saveModelVariant(modelKey: String, variant: String?) = Unit
     }
 
     private val client = OpenCodeClient("http://127.0.0.1:1")
@@ -83,7 +85,7 @@ class AppRepositoryEventsTest {
 
         val chat = repository.chat.value
         assertFalse(chat.busy)
-        assertEquals("ProviderAuthError: bad key", chat.error)
+        assertEquals(UiText.Raw("ProviderAuthError: bad key"), chat.error)
     }
 
     @Test
@@ -119,7 +121,7 @@ class AppRepositoryEventsTest {
             ),
         )
 
-        assertEquals("UnknownError", repository.chat.value.error)
+        assertEquals(UiText.Raw("UnknownError"), repository.chat.value.error)
     }
 
     @Test
@@ -136,7 +138,7 @@ class AppRepositoryEventsTest {
 
         // Routed to the dismissible sessions banner, not to the connection state:
         // the stream is alive, and nothing would ever clear a connection error.
-        assertEquals("UnknownError", repository.sessionError.value)
+        assertEquals(UiText.Raw("UnknownError"), repository.sessionError.value)
     }
 
     @Test
@@ -375,5 +377,33 @@ class AppRepositoryEventsTest {
         repository.handleEvent(client, event("server.heartbeat"))
 
         assertEquals(before, repository.chat.value)
+    }
+
+    @Test
+    fun childSessionErrorKeepsParentRunBusy() = runBlocking {
+        val repository = repository()
+        repository.setChatForTest(ChatState(sessionId = "ses_parent", busy = true))
+        repository.handleEvent(
+            client,
+            event("session.created", buildJsonObject { put("info", sessionInfo("ses_child", parentID = "ses_parent")) }),
+        )
+
+        repository.handleEvent(
+            client,
+            event(
+                "session.error",
+                buildJsonObject {
+                    put("sessionID", "ses_child")
+                    putJsonObject("error") {
+                        put("name", "ProviderAuthError")
+                        putJsonObject("data") { put("message", "bad key") }
+                    }
+                },
+            ),
+        )
+
+        // The failure is shown, but the parent's run (and its Stop button) goes on.
+        assertTrue(repository.chat.value.busy)
+        assertTrue(repository.chat.value.error != null)
     }
 }

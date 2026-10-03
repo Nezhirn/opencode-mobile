@@ -149,4 +149,45 @@ class OpenCodeClientRequestsTest {
 
         assertEquals("nope", error?.message)
     }
+
+    @Test
+    fun mcpStatusParsesServersByName() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"camoufox":{"status":"disabled"},"tavily":{"status":"connected"},"x":{"status":"failed","error":"spawn ENOENT"}}""",
+            ),
+        )
+
+        val statuses = client().mcpStatus()
+
+        assertEquals("/mcp", server.takeRequest().path)
+        assertEquals("disabled", statuses["camoufox"]?.status)
+        assertEquals("connected", statuses["tavily"]?.status)
+        assertEquals("spawn ENOENT", statuses["x"]?.error)
+    }
+
+    @Test
+    fun mcpConnectAndDisconnectPostToTheServerRoute() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("true"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("true"))
+
+        assertTrue(client().mcpConnect("camoufox"))
+        assertTrue(client().mcpDisconnect("camoufox"))
+
+        val connect = server.takeRequest()
+        assertEquals("POST", connect.method)
+        assertEquals("/mcp/camoufox/connect", connect.path)
+        val disconnect = server.takeRequest()
+        assertEquals("POST", disconnect.method)
+        assertEquals("/mcp/camoufox/disconnect", disconnect.path)
+    }
+
+    @Test
+    fun mcpNameIsEncodedAsOnePathSegment() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("true"))
+
+        client().mcpConnect("my server/x?y")
+
+        assertEquals("/mcp/my%20server%2Fx%3Fy/connect", server.takeRequest().path)
+    }
 }

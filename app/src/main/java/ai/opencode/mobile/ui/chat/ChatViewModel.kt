@@ -12,6 +12,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -27,12 +28,35 @@ class ChatViewModel(
     val agents = repository.agents
     val selectedModel = repository.selectedModel
     val selectedAgent = repository.selectedAgent
+    val availableVariants = repository.availableVariants
+    val selectedVariant = repository.selectedVariant
     val modelNotice = repository.modelNotice
     val enabledModels = repository.enabledModels
     val replying = repository.replying
 
-    /** The prompt being typed. Saved so it survives rotation and process death. */
-    val draft: StateFlow<String> = savedState.getStateFlow(DRAFT_KEY, "")
+    val mcpServers = repository.mcpServers
+    val mcpToggling = repository.mcpToggling
+    val mcpError = repository.mcpError
+
+    fun refreshMcp() = repository.refreshMcp()
+
+    fun setMcpEnabled(name: String, enabled: Boolean) = repository.setMcpEnabled(name, enabled)
+
+    fun clearMcpError() = repository.clearMcpError()
+
+    /**
+     * The prompt being typed. Mirrored into saved state so it survives process
+     * death — but only while it is small: saved state travels through a Binder
+     * transaction of about 1 MB, and a pasted multi-megabyte log made going to
+     * the background crash the app (TransactionTooLargeException).
+     */
+    private val _draft = MutableStateFlow(savedState[DRAFT_KEY] ?: "")
+    val draft: StateFlow<String> = _draft.asStateFlow()
+
+    private fun setDraft(text: String) {
+        _draft.value = text
+        savedState[DRAFT_KEY] = if (text.length <= MAX_SAVED_DRAFT_CHARS) text else ""
+    }
 
     private val sessionId = MutableStateFlow<String?>(null)
 
@@ -46,20 +70,21 @@ class ChatViewModel(
 
     fun open(id: String) {
         sessionId.value = id
-        repository.openChat(id)
+        repository.openChat(id, owner = this)
     }
 
     override fun onCleared() {
         // Release the shared chat state when leaving the screen so events stop
-        // being processed for a session that is no longer visible. Guard by id so
-        // this cannot clear a chat that was opened after this one.
-        repository.closeChat(sessionId.value)
+        // being processed for a session that is no longer visible. Guarded by
+        // owner, so this cannot clear a chat that a newer screen opened since —
+        // the same session reopened quickly included.
+        repository.closeChat(sessionId.value, owner = this)
         super.onCleared()
     }
 
-    fun onDraftChange(text: String) {
-        savedState[DRAFT_KEY] = text
-    }
+    fun onDraftChange(text: String) = setDraft(text)
+
+    fun clearError() = repository.clearChatError()
 
     /**
      * Clears the field right away, as a chat should, but gives the text back
@@ -69,10 +94,10 @@ class ChatViewModel(
     fun send() {
         val text = draft.value
         if (text.isBlank()) return
-        savedState[DRAFT_KEY] = ""
+        setDraft("")
         viewModelScope.launch {
             val accepted = repository.sendPrompt(text).await()
-            if (!accepted && draft.value.isEmpty()) savedState[DRAFT_KEY] = text
+            if (!accepted && draft.value.isEmpty()) setDraft(text)
         }
     }
 
@@ -81,6 +106,8 @@ class ChatViewModel(
     fun selectModel(model: PromptModel?) = repository.selectModel(model)
 
     fun selectAgent(agent: String?) = repository.selectAgent(agent)
+
+    fun selectVariant(variant: String?) = repository.selectVariant(variant)
 
     fun clearModelNotice() = repository.clearModelNotice()
 
@@ -99,6 +126,7 @@ class ChatViewModel(
 
     companion object {
         private const val DRAFT_KEY = "draft"
+        private const val MAX_SAVED_DRAFT_CHARS = 50_000
 
         val Factory = viewModelFactory {
             initializer { ChatViewModel(repository(), createSavedStateHandle()) }

@@ -83,4 +83,57 @@ class LocalEchoTest {
         assertEquals(listOf("local-1"), result.messages.map { it.info.id })
         assertTrue(result.messages.single().isLocalEcho)
     }
+
+    private fun textPart(messageId: String, id: String, text: String) =
+        Part(id = id, sessionID = "ses_1", messageID = messageId, type = "text", text = text)
+
+    @Test
+    fun snapshotDropsEchoTheServerAlreadyHas() {
+        // message.updated for the prompt was lost in a stream gap; the resync
+        // snapshot contains it under its real id.
+        val known = ChatMessageUi(userMessage("msg_old"), listOf(textPart("msg_old", "prt_old", "first")))
+        val live = state(known, localUserMessage("local-1", "second"))
+        val snapshot = listOf(
+            known,
+            ChatMessageUi(userMessage("msg_new"), listOf(textPart("msg_new", "prt_new", "second"))),
+        )
+
+        val result = live.withMessagesIfCurrent("ses_1", snapshot, knownBefore = setOf("msg_old", "local-1"))
+
+        assertEquals(listOf("msg_old", "msg_new"), result.messages.map { it.info.id })
+    }
+
+    @Test
+    fun snapshotKeepsMessagesThatArrivedWhileItLoaded() {
+        // Sent while the chat was loading: the echo already became msg_u.
+        val confirmed = ChatMessageUi(userMessage("msg_u"), listOf(textPart("msg_u", "prt_u", "hi")))
+        val live = state(confirmed)
+
+        val result = live.withMessagesIfCurrent("ses_1", listOf(ChatMessageUi(userMessage("msg_old"), emptyList())))
+
+        assertEquals(listOf("msg_old", "msg_u"), result.messages.map { it.info.id })
+    }
+
+    @Test
+    fun snapshotDropsMessagesRemovedOnTheServer() {
+        val gone = ChatMessageUi(userMessage("msg_gone"), emptyList())
+        val live = state(gone)
+
+        val result = live.withMessagesIfCurrent("ses_1", emptyList(), knownBefore = setOf("msg_gone"))
+
+        assertTrue(result.messages.isEmpty())
+    }
+
+    @Test
+    fun liveTextThatIsAheadOfTheSnapshotIsKept() {
+        val streaming = ChatMessageUi(
+            Message(id = "msg_a", sessionID = "ses_1", role = "assistant"),
+            listOf(textPart("msg_a", "prt_a", "Hello, wor")),
+        )
+        val snapshot = listOf(streaming.copy(parts = listOf(textPart("msg_a", "prt_a", "Hello"))))
+
+        val result = state(streaming).withMessagesIfCurrent("ses_1", snapshot, knownBefore = setOf("msg_a"))
+
+        assertEquals("Hello, wor", result.messages.single().parts.single().text)
+    }
 }

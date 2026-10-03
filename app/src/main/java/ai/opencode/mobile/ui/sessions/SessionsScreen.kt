@@ -3,6 +3,9 @@ package ai.opencode.mobile.ui.sessions
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ConnectionState
 import ai.opencode.mobile.data.remote.Session
+import ai.opencode.mobile.ui.asString
+import ai.opencode.mobile.ui.mcp.McpButton
+import ai.opencode.mobile.ui.mcp.McpSheet
 import android.app.Activity
 import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
@@ -67,6 +70,7 @@ fun SessionsScreen(
 ) {
     val viewModel: SessionsViewModel = viewModel(factory = SessionsViewModel.Factory)
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
+    val sessionsLoaded by viewModel.sessionsLoaded.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val permissions by viewModel.permissions.collectAsStateWithLifecycle()
     val questions by viewModel.questions.collectAsStateWithLifecycle()
@@ -74,7 +78,23 @@ fun SessionsScreen(
     val creating by viewModel.creatingSession.collectAsStateWithLifecycle()
     val deleting by viewModel.deletingSessions.collectAsStateWithLifecycle()
     val sessionError by viewModel.sessionError.collectAsStateWithLifecycle()
+    val mcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
     var pendingDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showMcp by rememberSaveable { mutableStateOf(false) }
+
+    if (showMcp) {
+        val mcpToggling by viewModel.mcpToggling.collectAsStateWithLifecycle()
+        val mcpError by viewModel.mcpError.collectAsStateWithLifecycle()
+        McpSheet(
+            servers = mcpServers,
+            toggling = mcpToggling,
+            error = mcpError,
+            onOpen = viewModel::refreshMcp,
+            onToggle = viewModel::setMcpEnabled,
+            onDismissError = viewModel::clearMcpError,
+            onDismiss = { showMcp = false },
+        )
+    }
 
     val filtered = remember(sessions, search) {
         if (search.isBlank()) sessions
@@ -114,6 +134,7 @@ fun SessionsScreen(
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.sessions_refresh))
                     }
+                    McpButton(servers = mcpServers, onClick = { showMcp = true })
                     IconButton(onClick = onOpenFiles) {
                         Icon(Icons.Filled.Folder, contentDescription = stringResource(R.string.sessions_open_files))
                     }
@@ -138,7 +159,7 @@ fun SessionsScreen(
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             when (val state = connection) {
                 is ConnectionState.Error -> Banner(
-                    text = state.message,
+                    text = state.message.asString(),
                     container = MaterialTheme.colorScheme.errorContainer,
                     content = MaterialTheme.colorScheme.onErrorContainer,
                 )
@@ -160,7 +181,7 @@ fun SessionsScreen(
 
             sessionError?.let { message ->
                 Banner(
-                    text = message,
+                    text = message.asString(),
                     container = MaterialTheme.colorScheme.errorContainer,
                     content = MaterialTheme.colorScheme.onErrorContainer,
                     onDismiss = viewModel::clearSessionError,
@@ -207,10 +228,20 @@ fun SessionsScreen(
 
             if (filtered.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        stringResource(R.string.sessions_empty),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    // "No sessions" only once the list was actually read: before
+                    // that (or with the server unreachable) it was a false claim.
+                    when {
+                        sessions.isNotEmpty() -> Text(
+                            stringResource(R.string.sessions_no_match),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        sessionsLoaded -> Text(
+                            stringResource(R.string.sessions_empty),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        connection is ConnectionState.Connecting || connection is ConnectionState.Connected ->
+                            CircularProgressIndicator()
+                    }
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {

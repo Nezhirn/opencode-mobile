@@ -55,21 +55,45 @@ internal fun String.safePrefix(max: Int): String {
  */
 internal fun String.chunkedForLayout(size: Int = LAYOUT_CHUNK_CHARS): List<String> {
     if (length <= size) return listOf(this)
-    val result = ArrayList<String>(length / size + 1)
+    val ends = chunkEnds(size)
+    val result = ArrayList<String>(ends.size)
+    var start = 0
+    ends.forEach { end ->
+        result.add(substring(start, end))
+        start = end
+    }
+    return result
+}
+
+/**
+ * End offsets (exclusive) of the chunks [chunkedForLayout] cuts [this] into. The
+ * newline search looks back only within the current chunk: searching the whole
+ * text made chunking a long line-less text quadratic.
+ */
+internal fun CharSequence.chunkEnds(size: Int = LAYOUT_CHUNK_CHARS): List<Int> {
+    val result = ArrayList<Int>(length / size + 1)
     var start = 0
     while (start < length) {
         val end = (start + size).coerceAtMost(length)
-        var cut = if (end == length) {
-            end
-        } else {
-            lastIndexOf('\n', end - 1).takeIf { it > start }?.plus(1) ?: end
+        var cut = end
+        if (end < length) {
+            var newline = end - 1
+            while (newline > start && this[newline] != '\n') newline--
+            if (newline > start) cut = newline + 1
         }
         if (cut < length && cut - start > 1 && Character.isHighSurrogate(this[cut - 1])) cut -= 1
-        result.add(substring(start, cut))
+        result.add(cut)
         start = cut
     }
     return result
 }
+
+/**
+ * A chunk as one Text shows it. A chunk ends with the newline it was cut at,
+ * and a Text renders a trailing newline as an extra empty line — one blank line
+ * that is not in the source every couple of thousand characters.
+ */
+internal fun String.chunkForDisplay(): String = removeSuffix("\n")
 
 /**
  * Shows a bounded prefix of [text] through [content], with controls to reveal
@@ -96,6 +120,14 @@ fun RevealableText(
         content(shown)
         val canCollapse = limit > initialChars && text.length > initialChars
         val canReveal = hidden > 0 && limit < MAX_REVEAL_CHARS
+        if (hidden > 0 && !canReveal) {
+            // Nothing more can be revealed: say so instead of silently cutting.
+            Text(
+                text = pluralStringResource(R.plurals.text_truncated, shown.length, shown.length),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (canReveal || canCollapse) {
             Row {
                 if (canReveal) {
@@ -142,5 +174,5 @@ fun TruncatedText(
 @Composable
 private fun ChunkedText(text: String, style: TextStyle) {
     val chunks = remember(text) { text.chunkedForLayout() }
-    chunks.forEach { chunk -> Text(text = chunk, style = style) }
+    chunks.forEach { chunk -> Text(text = chunk.chunkForDisplay(), style = style) }
 }

@@ -29,9 +29,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -152,10 +155,12 @@ private fun QuestionCard(
     onReply: (String, List<List<String>>) -> Unit,
     onReject: (String) -> Unit,
 ) {
-    val selections = remember(request.id) {
+    // Saveable: a recreation (split screen, font size, language) used to wipe
+    // the choices and the typed answer of a card that was half filled in.
+    val selections = rememberSaveable(request.id, saver = SelectionsSaver) {
         mutableStateOf(List(request.questions.size) { emptySet<String>() })
     }
-    val customs = remember(request.id) {
+    val customs = rememberSaveable(request.id, saver = CustomsSaver) {
         mutableStateOf(List(request.questions.size) { "" })
     }
 
@@ -240,3 +245,13 @@ private fun QuestionCard(
         }
     }
 }
+
+private val SelectionsSaver = listSaver<MutableState<List<Set<String>>>, ArrayList<String>>(
+    save = { state -> state.value.map { ArrayList(it) } },
+    restore = { saved -> mutableStateOf(saved.map { it.toSet() }) },
+)
+
+private val CustomsSaver = listSaver<MutableState<List<String>>, String>(
+    save = { state -> state.value },
+    restore = { saved -> mutableStateOf(saved) },
+)

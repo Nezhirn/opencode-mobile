@@ -14,6 +14,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -64,15 +66,15 @@ fun AppRoot() {
             val sessionId = entry.arguments?.getString("sessionId").orEmpty()
             ChatScreen(
                 sessionId = sessionId,
-                onBack = { navController.popBackStack() },
+                onBack = { navController.popIfCurrent(entry) },
                 onOpenFiles = { id ->
                     navController.navigate("files/$id") { launchSingleTop = true }
                 },
             )
         }
 
-        composable("files") {
-            FilesScreen(sessionId = null, onBack = { navController.popBackStack() })
+        composable("files") { entry ->
+            FilesScreen(sessionId = null, onBack = { navController.popIfCurrent(entry) })
         }
 
         composable(
@@ -80,15 +82,24 @@ fun AppRoot() {
             arguments = listOf(navArgument("sessionId") { type = NavType.StringType }),
         ) { entry ->
             val sessionId = entry.arguments?.getString("sessionId")
-            FilesScreen(sessionId = sessionId, onBack = { navController.popBackStack() })
+            FilesScreen(sessionId = sessionId, onBack = { navController.popIfCurrent(entry) })
         }
 
-        composable("settings") {
+        composable("settings") { entry ->
             ConnectScreen(
                 onConnected = {},
                 showBack = true,
-                onBack = { navController.popBackStack() },
+                onBack = { navController.popIfCurrent(entry) },
             )
         }
     }
+}
+
+/**
+ * Pops [entry] only while it is the top of the stack. During the exit
+ * animation the leaving screen still takes taps: a quick second tap on its back
+ * arrow popped the start destination too and left a blank screen.
+ */
+private fun NavHostController.popIfCurrent(entry: NavBackStackEntry) {
+    if (currentBackStackEntry?.id == entry.id) popBackStack()
 }
