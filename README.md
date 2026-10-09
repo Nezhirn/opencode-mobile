@@ -69,17 +69,11 @@
 
 ## Скриншоты
 
-Скриншоты лежат в каталоге [`docs/screenshots/`](docs/screenshots/). Положите реальные снимки экрана с указанными ниже именами — галерея подхватит их автоматически.
+| Подключение | Проекты | Сессии |
+|:---:|:---:|:---:|
+| ![Подключение](docs/screenshots/01-connect.png) | ![Проекты](docs/screenshots/02-projects.png) | ![Сессии](docs/screenshots/03-sessions.png) |
 
-| Подключение | Проекты | Сессии | Чат |
-|:---:|:---:|:---:|:---:|
-| ![Подключение](docs/screenshots/01-connect.png) | ![Проекты](docs/screenshots/02-projects.png) | ![Сессии](docs/screenshots/03-sessions.png) | ![Чат](docs/screenshots/04-chat.png) |
-
-| Модель и агент | Файлы и изменения | Контекст | MCP-серверы |
-|:---:|:---:|:---:|:---:|
-| ![Модель](docs/screenshots/05-model.png) | ![Файлы](docs/screenshots/06-files.png) | ![Контекст](docs/screenshots/07-context.png) | ![MCP](docs/screenshots/08-mcp.png) |
-
-> Для «Подключения», «Проектов» и «Сессий» уже лежат реальные снимки. Остальные — подписанные заглушки: замените их своими файлами с теми же именами (см. [`docs/screenshots/README.md`](docs/screenshots/README.md)).
+Скриншоты лежат в каталоге [`docs/screenshots/`](docs/screenshots/); как добавить свои — в [`docs/screenshots/README.md`](docs/screenshots/README.md).
 
 ## Требования
 
