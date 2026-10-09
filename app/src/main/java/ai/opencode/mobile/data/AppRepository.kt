@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -66,19 +67,34 @@ class AppRepository(private val settingsStore: SettingsSource) {
     private val _settingsLoaded = MutableStateFlow(false)
     val settingsLoaded: StateFlow<Boolean> = _settingsLoaded.asStateFlow()
 
-    private val clientFlow: StateFlow<OpenCodeClient?> = settings
-        .map { config ->
-            if (config.isConfigured) {
-                OpenCodeClient(
-                    baseUrl = config.baseUrl,
-                    username = config.username,
-                    password = config.password,
-                    allowInsecureTls = config.allowInsecureTls,
-                )
-            } else {
-                null
-            }
+    /**
+     * The project the app works in, tied to the server it was opened on: a
+     * project of one server must not be asked for on another for even one
+     * request after the settings changed.
+     */
+    private data class OpenProject(val baseUrl: String, val directory: String)
+
+    private val activeProject = MutableStateFlow<OpenProject?>(null)
+
+    private val clientFlow: StateFlow<OpenCodeClient?> = combine(settings, activeProject) { config, project ->
+        if (config.isConfigured) {
+            val baseUrl = OpenCodeClient.normalizeBaseUrl(config.baseUrl)
+            OpenCodeClient(
+                baseUrl = config.baseUrl,
+                username = config.username,
+                password = config.password,
+                allowInsecureTls = config.allowInsecureTls,
+                directory = project?.takeIf { it.baseUrl == baseUrl }?.directory,
+            )
+        } else {
+            null
         }
+    }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
+    /** Directory of the open project; null on the project list of a fresh start. */
+    val currentDirectory: StateFlow<String?> = clientFlow
+        .map { it?.directory }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -137,6 +153,11 @@ class AppRepository(private val settingsStore: SettingsSource) {
 
     private val selection = SelectionStore(scope, settingsStore)
 
+    private val projectStore = ProjectStore(scope, settingsStore)
+    val projects: StateFlow<List<ProjectUi>> = projectStore.projects
+    val projectsLoaded: StateFlow<Boolean> = projectStore.loaded
+    val projectsError: StateFlow<UiText?> = projectStore.error
+
     private val chatController = ChatController(
         scope = scope,
         clientProvider = { clientFlow.value },
@@ -178,23 +199,40 @@ class AppRepository(private val settingsStore: SettingsSource) {
 
     init {
         scope.launch {
-            // Avoid a flash of the connect screen before DataStore has loaded.
-            settingsStore.settings.first()
-            _settingsLoaded.value = true
+            settingsStore.settings
+                .map { config -> config.baseUrl.takeIf { config.isConfigured }?.let(OpenCodeClient::normalizeBaseUrl) }
+                .distinctUntilChanged()
+                .collect { url ->
+                    // Reopen the project last used on this server, before the UI
+                    // shows (process death restores screens, not this state).
+                    if (url != null && activeProject.value?.baseUrl != url) {
+                        settingsStore.lastProject(url).first()?.let { activeProject.value = OpenProject(url, it) }
+                    }
+                    // Avoid a flash of the connect screen before DataStore has loaded.
+                    _settingsLoaded.value = true
+                }
         }
         selection.restore()
         scope.launch {
             var boundUrl: String? = null
+            var boundDirectory: String? = null
             combine(clientFlow, retryTick, streamWanted) { client, _, wanted -> client to wanted }
                 .collectLatest { (client, wanted) ->
                     selection.bindServer(client?.baseUrl)
+                    projectStore.bindServer(client?.baseUrl)
                     if (client?.baseUrl != boundUrl) {
                         // Another server (or none): nothing of the previous one may
                         // stay on screen — its sessions, cards and chat would answer
                         // 404 here — and models must not be validated against its
                         // catalogue while the new list is still loading.
                         boundUrl = client?.baseUrl
+                        boundDirectory = client?.directory
                         clearServerData()
+                    } else if (client?.directory != boundDirectory) {
+                        // Another project of the same server: sessions, cards and
+                        // MCP servers belong to an instance, models do not.
+                        boundDirectory = client?.directory
+                        clearProjectData()
                     }
                     if (client == null) {
                         _connection.value = ConnectionState.Disconnected
@@ -228,15 +266,20 @@ class AppRepository(private val settingsStore: SettingsSource) {
     }
 
     private fun clearServerData() {
+        clearProjectData()
+        selection.clearProviders()
+    }
+
+    private fun clearProjectData() {
         _mcpServers.value = null
         _mcpError.value = null
         _sessions.value = emptyList()
         _sessionsLoaded.value = false
+        _sessionError.value = null
         _permissions.value = emptyList()
         _questions.value = emptyList()
         sessionTree.reset(emptyList())
         chatController.close()
-        selection.clearProviders()
     }
 
     // --- Connection and event stream ---
@@ -379,6 +422,7 @@ class AppRepository(private val settingsStore: SettingsSource) {
                 .onFailure { Log.w(TAG, "health check failed", it) }
         }
         launch { loadSessions(client) }
+        launch { loadProjects(client) }
         launch { loadProviders(client) }
         launch { loadAgents(client) }
         launch { loadPermissions(client) }
@@ -401,6 +445,10 @@ class AppRepository(private val settingsStore: SettingsSource) {
     /** True while [client] is still the one the app talks to; late answers of another are dropped. */
     private fun isCurrent(client: OpenCodeClient) = clientFlow.value === client
 
+    private suspend fun loadProjects(client: OpenCodeClient) {
+        projectStore.load(client) { isCurrent(client) }
+    }
+
     private suspend fun loadSessions(client: OpenCodeClient) {
         catchingNonCancellation { client.listSessions() }
             .onSuccess { list ->
@@ -413,6 +461,9 @@ class AppRepository(private val settingsStore: SettingsSource) {
                     .distinctBy { it.id }
                     .sortedByDescending { session -> session.time?.updated ?: 0 }
                 _sessionsLoaded.value = true
+                // The open chat's rollback state may have changed while the
+                // stream was down.
+                list.firstOrNull { it.id == chat.value.sessionId }?.let(chatController::onSessionUpdated)
             }
             .onFailure {
                 Log.w(TAG, "loadSessions failed", it)
@@ -494,6 +545,87 @@ class AppRepository(private val settingsStore: SettingsSource) {
                 // Leave the loading state even when nothing could be read.
                 _mcpServers.update { current -> current ?: emptyList() }
             }
+    }
+
+    // --- Projects ---
+
+    /** Re-reads the project list, e.g. when its screen is shown. */
+    fun refreshProjects() {
+        val client = clientFlow.value ?: return
+        scope.launch { loadProjects(client) }
+    }
+
+    /**
+     * Makes [directory] the project the app works in: sessions, files and the
+     * event stream switch to it. Remembered per server for the next start.
+     */
+    fun openProject(directory: String) {
+        val baseUrl = settings.value.takeIf { it.isConfigured }?.baseUrl?.let(OpenCodeClient::normalizeBaseUrl) ?: return
+        val normalized = normalizeDirectory(directory)
+        if (normalized.isEmpty()) return
+        activeProject.value = OpenProject(baseUrl, normalized)
+        scope.launch { settingsStore.saveLastProject(baseUrl, normalized) }
+    }
+
+    /** Adds a directory picked by hand to the project list and opens it. */
+    fun addProject(directory: String) {
+        val normalized = normalizeDirectory(directory)
+        if (normalized.isEmpty()) return
+        projectStore.add(normalized)
+        openProject(normalized)
+    }
+
+    fun hideProject(directory: String) {
+        projectStore.hide(directory)
+        val baseUrl = settings.value.baseUrl.let(OpenCodeClient::normalizeBaseUrl)
+        scope.launch {
+            if (settingsStore.lastProject(baseUrl).first() == directory) settingsStore.saveLastProject(baseUrl, null)
+        }
+    }
+
+    fun clearProjectsError() = projectStore.clearError()
+
+    /** The project last opened on the current server, to reopen it on start. */
+    suspend fun lastProject(): String? {
+        val config = settings.value.takeIf { it.isConfigured } ?: return null
+        return settingsStore.lastProject(OpenCodeClient.normalizeBaseUrl(config.baseUrl)).first()
+    }
+
+    /** The server's home directory, where the folder picker starts. */
+    suspend fun homeDirectory(): String? {
+        val client = clientFlow.value ?: return null
+        return catchingNonCancellation { client.pathInfo().home }
+            .onFailure { Log.w(TAG, "pathInfo failed", it) }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    /** Subdirectories of [directory] (absolute); null when it cannot be read. */
+    suspend fun listDirectories(directory: String): List<FileNode>? {
+        val client = clientFlow.value ?: return null
+        return catchingNonCancellation { client.listFilesIn(directory, "") }
+            .onFailure { Log.w(TAG, "listDirectories($directory) failed", it) }
+            .getOrNull()
+            ?.filter { it.type == "directory" }
+    }
+
+    /** Directories under [root] matching [query], as absolute paths. */
+    suspend fun findDirectories(query: String, root: String): List<String> {
+        val client = clientFlow.value ?: return emptyList()
+        return catchingNonCancellation { client.findDirectories(query, root) }
+            .onFailure { Log.w(TAG, "findDirectories failed", it) }
+            .getOrNull()
+            .orEmpty()
+            .map { relative -> normalizeDirectory(if (relative.startsWith("/")) relative else "${root.trimEnd('/')}/$relative") }
+    }
+
+    /** Files of the open project matching [query], relative to its root. */
+    suspend fun findFiles(query: String): List<String> {
+        val client = clientFlow.value ?: return emptyList()
+        return catchingNonCancellation { client.findFiles(query) }
+            .onFailure { Log.w(TAG, "findFiles failed", it) }
+            .getOrNull()
+            .orEmpty()
     }
 
     // --- MCP servers ---
@@ -598,7 +730,14 @@ class AppRepository(private val settingsStore: SettingsSource) {
     fun clearChatError() = chatController.clearError()
 
     /** Completes with whether the server accepted the prompt. */
-    fun sendPrompt(text: String): Deferred<Boolean> = chatController.sendPrompt(text)
+    fun sendPrompt(text: String, attachments: List<Attachment> = emptyList()): Deferred<Boolean> =
+        chatController.sendPrompt(text, attachments)
+
+    /** Rolls the chat back to before [messageId]; completes with what to edit, or null. */
+    fun revertTo(messageId: String): Deferred<EditDraft?> = chatController.revertTo(messageId)
+
+    /** Brings a rolled back message back; completes with the new prompt, or null. */
+    fun restoreMessage(messageId: String): Deferred<EditDraft?> = chatController.restore(messageId)
 
     fun abort() = chatController.abort()
 

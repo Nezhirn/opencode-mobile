@@ -3,6 +3,7 @@ package ai.opencode.mobile.data
 import ai.opencode.mobile.data.remote.Message
 import ai.opencode.mobile.data.remote.MessageWithParts
 import ai.opencode.mobile.data.remote.Part
+import ai.opencode.mobile.data.remote.SessionRevert
 import ai.opencode.mobile.data.remote.Todo
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,7 +34,63 @@ data class ChatState(
     val busy: Boolean = false,
     val loading: Boolean = false,
     val error: UiText? = null,
-)
+    /** Where the session is rolled back to; messages from there on are hidden. */
+    val revert: SessionRevert? = null,
+    /** A rollback or restore is on its way to the server. */
+    val reverting: Boolean = false,
+) {
+    /** The messages to show: everything before the rollback point. */
+    val visibleMessages: List<ChatMessageUi> by lazy(LazyThreadSafetyMode.PUBLICATION) { computeVisibleMessages() }
+
+    /** User messages hidden by the rollback, oldest first; each can be restored. */
+    val revertedUserMessages: List<ChatMessageUi> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        val index = revertIndex()
+        if (index < 0) {
+            emptyList()
+        } else {
+            val first = if (revert?.partID != null) index + 1 else index
+            messages.drop(first).filter { it.info.role == USER_ROLE }
+        }
+    }
+
+    private fun revertIndex(): Int {
+        val point = revert ?: return -1
+        return messages.indexOfFirst { it.info.id == point.messageID }
+    }
+
+    /**
+     * Mirrors the server's cleanup: messages after the point go; with a
+     * `partID` the message at the point stays, cut before that part.
+     */
+    private fun computeVisibleMessages(): List<ChatMessageUi> {
+        val index = revertIndex()
+        if (index < 0) return messages
+        val partId = revert?.partID ?: return messages.subList(0, index).toList()
+        val message = messages[index]
+        val partIndex = message.parts.indexOfFirst { it.id == partId }
+        val kept = if (partIndex < 0) message else message.copy(parts = message.parts.take(partIndex))
+        return messages.take(index) + kept
+    }
+}
+
+/**
+ * The message to roll back to when [messageId] is restored: the next hidden user
+ * message, so [messageId] and its answers come back while later ones stay
+ * hidden. Null when it is the last one — then the whole rollback is undone.
+ */
+internal fun ChatState.restoreTarget(messageId: String): ChatMessageUi? {
+    val hidden = revertedUserMessages
+    val index = hidden.indexOfFirst { it.info.id == messageId }
+    return if (index < 0) null else hidden.getOrNull(index + 1)
+}
+
+/**
+ * Drops what the rollback hid, as the server does once the next prompt is
+ * sent. Applied before the prompt's echo is added, which would otherwise land
+ * behind the rollback point and stay hidden.
+ */
+internal fun ChatState.committedRevert(): ChatState =
+    if (revert == null) this else copy(messages = visibleMessages, revert = null)
 
 internal const val USER_ROLE = "user"
 internal const val TEXT_PART_TYPE = "text"
@@ -46,10 +103,31 @@ internal const val TEXT_PART_TYPE = "text"
  */
 internal const val LOCAL_ID_PREFIX = "local-"
 
-internal fun localUserMessage(id: String, text: String): ChatMessageUi = ChatMessageUi(
-    info = Message(id = id, role = USER_ROLE),
-    parts = listOf(Part(id = "$id-part", messageID = id, type = TEXT_PART_TYPE, text = text)),
-)
+internal fun localUserMessage(id: String, text: String, attachments: List<Attachment> = emptyList()): ChatMessageUi {
+    val textParts = if (text.isEmpty() && attachments.isNotEmpty()) {
+        emptyList()
+    } else {
+        listOf(Part(id = "$id-part", messageID = id, type = TEXT_PART_TYPE, text = text))
+    }
+    val fileParts = attachments.mapIndexed { index, attachment ->
+        Part(
+            id = "$id-file-$index",
+            messageID = id,
+            type = FILE_PART_TYPE,
+            mime = attachment.mime,
+            filename = attachment.filename,
+            url = attachment.url,
+        )
+    }
+    return ChatMessageUi(info = Message(id = id, role = USER_ROLE), parts = textParts + fileParts)
+}
+
+/** What the user typed in [this] message, without synthetic parts. */
+internal fun ChatMessageUi.userText(): String =
+    parts.filter { it.type == TEXT_PART_TYPE && it.synthetic != true }.joinToString("\n") { it.text.orEmpty() }.trim()
+
+/** The files sent with [this] message. */
+internal fun ChatMessageUi.attachments(): List<Attachment> = parts.mapNotNull { it.toAttachment() }
 
 internal fun MessageWithParts.toUi(): ChatMessageUi = ChatMessageUi(info = info, parts = parts)
 
@@ -173,9 +251,6 @@ internal fun ChatState.withMessagesIfCurrent(
     }
     return copy(messages = merged + extras, loading = false, error = null)
 }
-
-private fun ChatMessageUi.userText(): String =
-    parts.filter { it.type == TEXT_PART_TYPE && it.synthetic != true }.joinToString("\n") { it.text.orEmpty() }.trim()
 
 /** The snapshot copy of a message, keeping live parts that are ahead of it. */
 private fun ChatMessageUi.mergedWith(live: ChatMessageUi): ChatMessageUi {

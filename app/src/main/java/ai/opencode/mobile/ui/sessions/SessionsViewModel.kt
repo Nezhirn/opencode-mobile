@@ -1,6 +1,8 @@
 package ai.opencode.mobile.ui.sessions
 
 import ai.opencode.mobile.data.AppRepository
+import ai.opencode.mobile.data.ProjectUi
+import ai.opencode.mobile.data.directoryName
 import ai.opencode.mobile.ui.repository
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,13 +11,23 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class SessionsViewModel(private val repository: AppRepository) : ViewModel() {
 
     val sessions = repository.sessions
+
+    /** The open project; its name and path head the list. */
+    val project: StateFlow<ProjectUi?> = combine(repository.currentDirectory, repository.projects) { directory, projects ->
+        directory?.let { dir -> projects.firstOrNull { it.directory == dir } ?: ProjectUi(directory = dir, name = directoryName(dir)) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val sessionsLoaded = repository.sessionsLoaded
     val connection = repository.connection
     val permissions = repository.permissions

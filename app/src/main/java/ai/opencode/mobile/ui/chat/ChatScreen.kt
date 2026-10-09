@@ -3,10 +3,15 @@ package ai.opencode.mobile.ui.chat
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ChatMessageUi
 import ai.opencode.mobile.data.ChatState
+import ai.opencode.mobile.data.userText
 import ai.opencode.mobile.ui.asString
 import ai.opencode.mobile.ui.components.TruncatedText
 import ai.opencode.mobile.ui.mcp.McpButton
 import ai.opencode.mobile.ui.mcp.McpSheet
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
@@ -15,11 +20,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -29,6 +37,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,9 +63,14 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -87,11 +102,24 @@ fun ChatScreen(
     val enabledModels by viewModel.enabledModels.collectAsStateWithLifecycle()
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val mcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
+    val attachments by viewModel.attachments.collectAsStateWithLifecycle()
+    val thumbnails by viewModel.thumbnails.collectAsStateWithLifecycle()
+    val attachError by viewModel.attachError.collectAsStateWithLifecycle()
+    val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) { viewModel.open(sessionId) }
     var showModelSheet by rememberSaveable { mutableStateOf(false) }
     var showManageModels by rememberSaveable { mutableStateOf(false) }
     var showMcp by rememberSaveable { mutableStateOf(false) }
+    var showContext by rememberSaveable { mutableStateOf(false) }
+    var showFilePicker by rememberSaveable { mutableStateOf(false) }
+    val pickDeviceFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        viewModel.addDeviceFiles(uris)
+    }
+    val promptFocus = remember { FocusRequester() }
+    LaunchedEffect(viewModel) {
+        viewModel.focusPrompt.collect { runCatching { promptFocus.requestFocus() } }
+    }
 
     Scaffold(
         topBar = {
@@ -132,6 +160,7 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    ContextButton(usagePercent = contextUsage, onClick = { showContext = true })
                     IconButton(onClick = { showModelSheet = true }) {
                         Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.chat_model_and_agent))
                     }
@@ -164,7 +193,11 @@ fun ChatScreen(
                 }
 
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    MessageList(chat = chat, modifier = Modifier.fillMaxSize())
+                    MessageList(
+                        chat = chat,
+                        onEdit = viewModel::edit,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
 
                 if (questions.isNotEmpty()) {
@@ -224,6 +257,31 @@ fun ChatScreen(
                     }
                 }
 
+                attachError?.let { error ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = error.asString(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = viewModel::clearAttachError) {
+                            Text(stringResource(R.string.action_dismiss))
+                        }
+                    }
+                }
+
+                RevertDock(
+                    messages = chat.revertedUserMessages,
+                    reverting = chat.reverting,
+                    onRestore = viewModel::restore,
+                )
+
                 InputBar(
                     text = draft,
                     onTextChange = viewModel::onDraftChange,
@@ -233,6 +291,12 @@ fun ChatScreen(
                     variants = availableVariants,
                     selectedVariant = selectedVariant,
                     onSelectVariant = viewModel::selectVariant,
+                    attachments = attachments,
+                    thumbnails = thumbnails,
+                    onAttachFromDevice = { pickDeviceFiles.launch(DEVICE_PICKER_MIMES) },
+                    onAttachFromProject = { showFilePicker = true },
+                    onRemoveAttachment = viewModel::removeAttachment,
+                    focusRequester = promptFocus,
                     modifier = Modifier.onSizeChanged { size -> inputBarHeight = with(density) { size.height.toDp() } },
                 )
             }
@@ -277,6 +341,27 @@ fun ChatScreen(
         )
     }
 
+    if (showContext) {
+        val stats by viewModel.contextStats.collectAsStateWithLifecycle()
+        ContextSheet(stats = stats, sessionTitle = chat.title, onDismiss = { showContext = false })
+    }
+
+    if (showFilePicker) {
+        val picker by viewModel.filePicker.collectAsStateWithLifecycle()
+        ProjectFilePickerSheet(
+            state = picker,
+            onOpen = viewModel::openFilePicker,
+            onQueryChange = viewModel::onFileQueryChange,
+            onBrowse = viewModel::browseFiles,
+            onUp = viewModel::browseFilesUp,
+            onPick = { path ->
+                showFilePicker = false
+                viewModel.addProjectFile(path)
+            },
+            onDismiss = { showFilePicker = false },
+        )
+    }
+
     if (showManageModels) {
         ManageModelsSheet(
             providers = providers,
@@ -303,7 +388,8 @@ private val PANEL_MAX_HEIGHT = 320.dp
 private val FOLLOW_TOLERANCE = 48.dp
 
 @Composable
-private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
+private fun MessageList(chat: ChatState, onEdit: (String) -> Unit, modifier: Modifier = Modifier) {
+    val messages = chat.visibleMessages
     val listState = rememberLazyListState()
     val tolerancePx = with(LocalDensity.current) { FOLLOW_TOLERANCE.roundToPx() }
 
@@ -337,10 +423,10 @@ private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
     // tool call. Computed directly rather than through remember — summing a few
     // lengths is cheaper than the deep equals a ChatMessageUi key would cost,
     // and LaunchedEffect only compares the resulting ints.
-    val lastMessage = chat.messages.lastOrNull()
+    val lastMessage = messages.lastOrNull()
     val lastParts = lastMessage?.parts
     val contentSignature = Triple(
-        chat.messages.size,
+        messages.size,
         lastParts?.size ?: 0,
         lastParts?.sumOf { part ->
             (part.text?.length ?: 0) + (part.state?.output?.length ?: 0) + (part.state?.status?.length ?: 0)
@@ -355,14 +441,14 @@ private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
         listState.scrollToEnd()
     }
 
-    if (chat.loading && chat.messages.isEmpty()) {
+    if (chat.loading && messages.isEmpty()) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
         return
     }
 
-    if (chat.messages.isEmpty()) {
+    if (messages.isEmpty()) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Text(
                 stringResource(R.string.chat_empty),
@@ -378,8 +464,8 @@ private fun MessageList(chat: ChatState, modifier: Modifier = Modifier) {
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(chat.messages, key = { it.info.id }, contentType = { it.info.role }) { message ->
-            MessageItem(message)
+        items(messages, key = { it.info.id }, contentType = { it.info.role }) { message ->
+            MessageItem(message, editEnabled = !chat.reverting, onEdit = onEdit)
         }
     }
 }
@@ -415,9 +501,9 @@ private const val END_SCROLL_STEP_PX = 100_000f
 private const val MAX_END_SCROLL_STEPS = 10
 
 @Composable
-private fun MessageItem(message: ChatMessageUi) {
+private fun MessageItem(message: ChatMessageUi, editEnabled: Boolean, onEdit: (String) -> Unit) {
     if (message.info.role == "user") {
-        UserMessage(message)
+        UserMessage(message, editEnabled, onEdit)
     } else {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -440,11 +526,17 @@ private fun MessageItem(message: ChatMessageUi) {
     }
 }
 
+/**
+ * A sent prompt. A tap shows its actions (copy, edit) below it, like the web
+ * client's hover row; a long press stays with text selection.
+ */
 @Composable
-private fun UserMessage(message: ChatMessageUi) {
+private fun UserMessage(message: ChatMessageUi, editEnabled: Boolean, onEdit: (String) -> Unit) {
     val (texts, files) = remember(message.parts) {
         message.parts.filter { it.type == "text" && it.synthetic != true } to message.parts.filter { it.type == "file" }
     }
+    var showActions by rememberSaveable(message.info.id) { mutableStateOf(false) }
+    val actionsAvailable = !message.isLocalEcho
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End,
@@ -455,7 +547,10 @@ private fun UserMessage(message: ChatMessageUi) {
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer,
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.widthIn(max = 320.dp),
+                    modifier = Modifier
+                        .widthIn(max = 320.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable(enabled = actionsAvailable) { showActions = !showActions },
                 ) {
                     // What the user typed is shown as typed (no Markdown), but
                     // bounded: a pasted log can be megabytes.
@@ -471,7 +566,44 @@ private fun UserMessage(message: ChatMessageUi) {
             }
         }
         files.forEach { part ->
-            key(part.id) { FileChip(part.filename ?: part.url.orEmpty()) }
+            key(part.id) {
+                FileChip(
+                    name = part.filename ?: part.url.orEmpty(),
+                    icon = attachmentIcon(part.mime),
+                    onClick = if (actionsAvailable) ({ showActions = !showActions }) else null,
+                )
+            }
+        }
+        if (showActions && actionsAvailable) {
+            MessageActions(message = message, editEnabled = editEnabled, onEdit = {
+                showActions = false
+                onEdit(message.info.id)
+            })
+        }
+    }
+}
+
+@Composable
+private fun MessageActions(message: ChatMessageUi, editEnabled: Boolean, onEdit: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val copied = stringResource(R.string.message_copied)
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = {
+            clipboard.setText(AnnotatedString(message.userText()))
+            // Android 13+ confirms copies itself.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                Toast.makeText(context, copied, Toast.LENGTH_SHORT).show()
+            }
+        }) {
+            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.message_copy))
+        }
+        TextButton(onClick = onEdit, enabled = editEnabled) {
+            Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.message_edit))
         }
     }
 }

@@ -162,4 +162,76 @@
     <string name="notice_model_replaced">%1$s is not configured in opencode; using %2$s.</string>
     <string name="notice_model_missing">%1$s is not configured in opencode.</string>
     <string name="notice_agent_missing">Agent %1$s is not available in opencode; using the default agent.</string>
+
+    <!-- Projects -->
+    <string name="projects_title">Projects</string>
+    <string name="projects_add">Add project</string>
+    <string name="projects_add_hint">Pick a folder on the server. Its sessions, files and agent runs stay in it.</string>
+    <string name="projects_search_folders">Search folders</string>
+    <string name="projects_pick_folder">Open this folder</string>
+    <string name="projects_no_folders">No folders here</string>
+    <string name="projects_folder_unreadable">This folder cannot be read</string>
+    <string name="projects_empty">No projects yet. Tap the folder button to add one.</string>
+    <string name="projects_hide">Remove from list</string>
+    <plurals name="projects_sessions">
+        <item quantity="one">%1$d session</item>
+        <item quantity="other">%1$d sessions</item>
+    </plurals>
+    <string name="error_load_projects">Failed to load projects</string>
+
+    <!-- Attachments -->
+    <string name="attach_file">Attach</string>
+    <string name="attach_from_device">From phone</string>
+    <string name="attach_from_project">From project</string>
+    <string name="attach_remove">Remove attachment</string>
+    <string name="attach_project_title">Project file</string>
+    <string name="attach_search_files">Search files</string>
+    <string name="attach_no_files">No files found</string>
+    <string name="error_attachment_too_large">%1$s is larger than %2$d MB</string>
+    <string name="error_attachment_read">Could not read %1$s</string>
+    <string name="error_attachment_type">%1$s cannot be attached: only images, PDF and text files</string>
+
+    <!-- Context -->
+    <string name="context_title">Context</string>
+    <string name="context_view">View context usage</string>
+    <string name="context_empty">No model replies yet</string>
+    <string name="context_session">Session</string>
+    <string name="context_messages">Messages</string>
+    <string name="context_provider">Provider</string>
+    <string name="context_model">Model</string>
+    <string name="context_limit">Context limit</string>
+    <string name="context_total_tokens">Total tokens</string>
+    <string name="context_usage">Usage</string>
+    <string name="context_input_tokens">Input tokens</string>
+    <string name="context_output_tokens">Output tokens</string>
+    <string name="context_reasoning_tokens">Reasoning tokens</string>
+    <string name="context_cache_tokens">Cache tokens (read/write)</string>
+    <string name="context_user_messages">User messages</string>
+    <string name="context_assistant_messages">Assistant messages</string>
+    <string name="context_total_cost">Total cost</string>
+    <string name="context_created">Session created</string>
+    <string name="context_last_activity">Last activity</string>
+    <string name="context_breakdown">Context breakdown</string>
+    <string name="context_breakdown_system">System</string>
+    <string name="context_breakdown_user">User</string>
+    <string name="context_breakdown_assistant">Assistant</string>
+    <string name="context_breakdown_tool">Tool calls</string>
+    <string name="context_breakdown_other">Other</string>
+    <string name="context_breakdown_hint">Estimated from the text of the messages</string>
+    <string name="context_system_prompt">System prompt</string>
+
+    <!-- Edit and revert -->
+    <string name="message_copy">Copy</string>
+    <string name="message_edit">Edit</string>
+    <string name="message_copied">Copied</string>
+    <plurals name="revert_summary">
+        <item quantity="one">%1$d message rolled back</item>
+        <item quantity="other">%1$d messages rolled back</item>
+    </plurals>
+    <string name="revert_hint">Send to replace them; file changes after this point are undone too.</string>
+    <string name="revert_restore">Restore</string>
+    <string name="revert_expand">Show rolled back messages</string>
+    <string name="revert_collapse">Hide rolled back messages</string>
+    <string name="error_revert">Failed to roll back the session</string>
+    <string name="error_unrevert">Failed to restore the messages</string>
 </resources>

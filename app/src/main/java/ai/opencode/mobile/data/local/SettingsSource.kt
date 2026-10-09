@@ -1,6 +1,7 @@
 package ai.opencode.mobile.data.local
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * The model and agent the user picked explicitly. Blank ids mean "not chosen";
@@ -41,4 +42,17 @@ interface SettingsSource {
      */
     val modelVariants: Flow<Map<String, String>>
     suspend fun saveModelVariant(modelKey: String, variant: String?)
+
+    /**
+     * Project directories of the server at [serverUrl] the user added by hand
+     * (they may have no session yet) and the ones they removed from the list.
+     */
+    fun savedProjects(serverUrl: String): Flow<Set<String>> = flowOf(emptySet())
+    suspend fun saveSavedProjects(serverUrl: String, directories: Set<String>) = Unit
+    fun hiddenProjects(serverUrl: String): Flow<Set<String>> = flowOf(emptySet())
+    suspend fun saveHiddenProjects(serverUrl: String, directories: Set<String>) = Unit
+
+    /** The project last opened on [serverUrl]; it is reopened on the next start. */
+    fun lastProject(serverUrl: String): Flow<String?> = flowOf(null)
+    suspend fun saveLastProject(serverUrl: String, directory: String?) = Unit
 }

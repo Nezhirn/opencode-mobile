@@ -2,10 +2,12 @@ package ai.opencode.mobile.data
 
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.remote.OpenCodeClient
+import ai.opencode.mobile.data.remote.PromptPart
 import ai.opencode.mobile.data.remote.PromptRequest
 import ai.opencode.mobile.data.remote.Session
-import ai.opencode.mobile.data.remote.TextPartInput
+import ai.opencode.mobile.data.remote.SessionRevert
 import android.util.Log
+import androidx.annotation.StringRes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -96,6 +98,7 @@ internal class ChatController(
             sessionId = sessionId,
             title = session?.title.orEmpty(),
             loading = true,
+            revert = session?.revert?.takeIf { it.messageID.isNotBlank() },
         )
         session?.model?.let(selection::adoptSessionModel)
         loadJob = scope.launch { load(client, sessionId) }
@@ -188,11 +191,13 @@ internal class ChatController(
      * Sends a prompt and completes with whether the server accepted it, so the
      * caller can give the text back to the user when it was not sent.
      */
-    fun sendPrompt(text: String): Deferred<Boolean> {
+    fun sendPrompt(text: String, attachments: List<Attachment> = emptyList()): Deferred<Boolean> {
         val trimmed = text.trim()
         val sessionId = currentSessionId
         val client = clientProvider()
-        if (trimmed.isEmpty() || sessionId == null || client == null) return CompletableDeferred(false)
+        if ((trimmed.isEmpty() && attachments.isEmpty()) || sessionId == null || client == null) {
+            return CompletableDeferred(false)
+        }
         return scope.async {
             val ready = when (val check = selection.checkSendable()) {
                 is SendSelection.Rejected -> {
@@ -203,11 +208,15 @@ internal class ChatController(
             }
             val localId = "$LOCAL_ID_PREFIX${System.currentTimeMillis()}-${localMessageCounter.incrementAndGet()}"
             statusEpoch.incrementAndGet()
+            // A prompt sent while rolled back replaces what was rolled back: the
+            // server deletes it before running the prompt.
+            val wasReverted = _state.value.revert != null
             _state.updateIfCurrent(sessionId) { state ->
-                state.copy(
+                val committed = state.committedRevert()
+                committed.copy(
                     busy = true,
                     error = null,
-                    messages = state.messages + localUserMessage(localId, trimmed),
+                    messages = committed.messages + localUserMessage(localId, trimmed, attachments),
                 )
             }
             armBusyWatchdog()
@@ -215,7 +224,10 @@ internal class ChatController(
                 model = ready.model,
                 agent = ready.agent,
                 variant = ready.variant,
-                parts = listOf(TextPartInput(type = TEXT_PART_TYPE, text = trimmed)),
+                parts = buildList {
+                    if (trimmed.isNotEmpty()) add(PromptPart(type = TEXT_PART_TYPE, text = trimmed))
+                    attachments.forEach { add(it.toPromptPart()) }
+                },
             )
             catchingNonCancellation { client.promptAsync(sessionId, request) }
                 .onFailure { error ->
@@ -226,6 +238,9 @@ internal class ChatController(
                             error = error.toUiText(R.string.error_send_prompt),
                         )
                     }
+                    // Whether the server dropped the rolled back messages before
+                    // failing is unknown: read back what it has.
+                    if (wasReverted && currentSessionId == sessionId) resync()
                 }
                 .isSuccess
         }
@@ -260,7 +275,107 @@ internal class ChatController(
     }
 
     fun onSessionUpdated(session: Session) {
-        _state.updateIfCurrent(session.id) { state -> state.copy(title = session.title) }
+        _state.updateIfCurrent(session.id) { state ->
+            state.copy(title = session.title, revert = session.revert?.takeIf { it.messageID.isNotBlank() })
+        }
+    }
+
+    /**
+     * "Edit" on a sent message, as in the web client: rolls the session back to
+     * just before [messageId] (stopping a run first, which the server requires)
+     * and completes with the message's text and files to put back into the
+     * prompt — or null when the rollback failed. The messages stay hidden, not
+     * deleted, until the next prompt; [restore] brings them back.
+     */
+    fun revertTo(messageId: String): Deferred<EditDraft?> {
+        val sessionId = currentSessionId
+        val client = clientProvider()
+        val state = _state.value
+        val message = state.visibleMessages.firstOrNull { it.info.id == messageId }
+        if (sessionId == null || client == null || message == null || message.isLocalEcho ||
+            message.info.role != USER_ROLE || state.reverting
+        ) {
+            return CompletableDeferred(null)
+        }
+        val draft = EditDraft(message.userText(), message.attachments())
+        return changeRevert(
+            sessionId = sessionId,
+            optimistic = SessionRevert(messageID = messageId),
+            failure = R.string.error_revert,
+        ) { client.revert(sessionId, messageId) }.let { result ->
+            scope.async { if (result.await()) draft else null }
+        }
+    }
+
+    /**
+     * Brings the rolled back [messageId] back with its answers. Later hidden
+     * messages stay hidden, the next of them becoming the one being edited (its
+     * text is returned for the prompt); restoring the last one undoes the
+     * rollback and returns an empty draft. Null when the server refused.
+     */
+    fun restore(messageId: String): Deferred<EditDraft?> {
+        val sessionId = currentSessionId
+        val client = clientProvider()
+        val state = _state.value
+        if (sessionId == null || client == null || state.revert == null || state.reverting ||
+            state.revertedUserMessages.none { it.info.id == messageId }
+        ) {
+            return CompletableDeferred(null)
+        }
+        val target = state.restoreTarget(messageId)
+        val draft = target?.let { EditDraft(it.userText(), it.attachments()) } ?: EditDraft("", emptyList())
+        return changeRevert(
+            sessionId = sessionId,
+            optimistic = target?.let { SessionRevert(messageID = it.info.id) },
+            failure = R.string.error_unrevert,
+        ) {
+            if (target != null) client.revert(sessionId, target.info.id) else client.unrevert(sessionId)
+        }.let { result ->
+            scope.async { if (result.await()) draft else null }
+        }
+    }
+
+    /**
+     * Shows [optimistic] at once, runs [request] and settles on the session the
+     * server answers with; on failure the previous rollback state comes back.
+     */
+    private fun changeRevert(
+        sessionId: String,
+        optimistic: SessionRevert?,
+        @StringRes failure: Int,
+        request: suspend () -> Session,
+    ): Deferred<Boolean> {
+        val client = clientProvider() ?: return CompletableDeferred(false)
+        val previous = _state.value.revert
+        val wasBusy = _state.value.busy
+        _state.updateIfCurrent(sessionId) { state -> state.copy(revert = optimistic, reverting = true, error = null) }
+        return scope.async {
+            if (wasBusy) {
+                catchingNonCancellation { client.abort(sessionId) }
+                    .onFailure { Log.w(TAG, "abort before revert failed", it) }
+                statusEpoch.incrementAndGet()
+                _state.updateIfCurrent(sessionId) { state -> state.copy(busy = false) }
+            }
+            var result = catchingNonCancellation { request() }
+            if (result.isFailure && wasBusy) {
+                // The run may need a moment to wind down after the abort.
+                delay(REVERT_RETRY_DELAY_MILLIS)
+                result = catchingNonCancellation { request() }
+            }
+            result
+                .onSuccess { session ->
+                    _state.updateIfCurrent(sessionId) { state ->
+                        state.copy(revert = session.revert?.takeIf { it.messageID.isNotBlank() }, reverting = false)
+                    }
+                }
+                .onFailure { error ->
+                    Log.w(TAG, "changing the rollback of $sessionId failed", error)
+                    _state.updateIfCurrent(sessionId) { state ->
+                        state.copy(revert = previous, reverting = false, error = error.toUiText(failure))
+                    }
+                }
+                .isSuccess
+        }
     }
 
     /** Test hook: installs chat state without any network call. */
@@ -500,6 +615,7 @@ internal class ChatController(
 
     private companion object {
         const val TAG = "ChatController"
+        const val REVERT_RETRY_DELAY_MILLIS = 500L
         const val DELTA_FLUSH_INTERVAL_MILLIS = 50L
         const val WATCHDOG_INTERVAL_MILLIS = 30_000L
         const val SILENCE_BEFORE_CHECK_MILLIS = 120_000L

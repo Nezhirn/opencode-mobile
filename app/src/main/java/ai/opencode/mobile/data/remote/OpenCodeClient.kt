@@ -47,14 +47,21 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * Thin HTTP client for the opencode server. Stateless with respect to app
- * configuration: base URL and credentials are fixed per instance, so a new
- * instance is created whenever the connection settings change.
+ * configuration: base URL, credentials and project are fixed per instance, so a
+ * new instance is created whenever the connection settings or the open project
+ * change.
+ *
+ * [directory] is the project the app works in. opencode runs one instance per
+ * directory, and sessions, files, permissions and the event stream all belong
+ * to one; it is therefore sent with every instance-scoped request. Null talks
+ * to the server's default instance.
  */
 class OpenCodeClient(
     baseUrl: String,
     private val username: String? = null,
     private val password: String? = null,
     private val allowInsecureTls: Boolean = false,
+    val directory: String? = null,
 ) {
     val baseUrl: String = normalizeBaseUrl(baseUrl)
 
@@ -78,6 +85,10 @@ class OpenCodeClient(
         val builder = "$baseUrl$path".toHttpUrlOrNull()?.newBuilder()
             ?: throw IllegalArgumentException("Invalid server URL: $baseUrl$path")
         query.forEach { (key, value) -> if (value != null) builder.addQueryParameter(key, value) }
+        val directory = directory
+        if (directory != null && DIRECTORY_QUERY !in query && isInstanceScoped(path)) {
+            builder.addQueryParameter(DIRECTORY_QUERY, directory)
+        }
         return builder.build()
     }
 
@@ -222,6 +233,7 @@ class OpenCodeClient(
         is CreateSessionRequest -> CreateSessionRequest.serializer()
         is PermissionReplyRequest -> PermissionReplyRequest.serializer()
         is QuestionReplyRequest -> QuestionReplyRequest.serializer()
+        is RevertRequest -> RevertRequest.serializer()
         else -> error("No serializer registered for ${value::class}")
     }
 
@@ -232,6 +244,61 @@ class OpenCodeClient(
 
     suspend fun listSessions(): List<Session> =
         execute(newRequest("GET", "/session"), ListSerializer(Session.serializer()))
+
+    /** Every project the server knows, `global` (non-git directories) included. */
+    suspend fun listProjects(): List<Project> =
+        execute(newRequest("GET", "/project"), ListSerializer(Project.serializer()))
+
+    suspend fun pathInfo(): PathInfo = execute(newRequest("GET", "/path"), PathInfo.serializer())
+
+    /**
+     * Sessions of every project with their directories, newest first. Servers
+     * without the `/api` routes answer 404; the caller then falls back to
+     * [listSessions], which only covers the default instance's project.
+     */
+    suspend fun listAllSessions(): List<SessionSummary> =
+        execute(
+            newRequest("GET", "/api/session", query = mapOf("limit" to "$ALL_SESSIONS_LIMIT", "order" to "desc")),
+            SessionSummaryPage.serializer(),
+        ).data
+
+    /**
+     * Directories under [root] whose path matches [query] (fuzzy, like the web
+     * folder picker). Paths in the answer are relative to [root].
+     */
+    suspend fun findDirectories(query: String, root: String): List<String> =
+        execute(
+            newRequest(
+                "GET",
+                "/find/file",
+                query = mapOf(
+                    "query" to query,
+                    "dirs" to "true",
+                    "type" to "directory",
+                    "limit" to "$FIND_LIMIT",
+                    DIRECTORY_QUERY to root,
+                ),
+            ),
+            ListSerializer(String.serializer()),
+        )
+
+    /** Files of the current project whose path matches [query], relative to its root. */
+    suspend fun findFiles(query: String): List<String> =
+        execute(
+            newRequest(
+                "GET",
+                "/find/file",
+                query = mapOf("query" to query, "dirs" to "false", "type" to "file", "limit" to "$FIND_LIMIT"),
+            ),
+            ListSerializer(String.serializer()),
+        )
+
+    /** Lists [path] (relative) under [root] instead of the current project. */
+    suspend fun listFilesIn(root: String, path: String): List<FileNode> =
+        execute(
+            newRequest("GET", "/file", query = mapOf("path" to path, DIRECTORY_QUERY to root)),
+            ListSerializer(FileNode.serializer()),
+        )
 
     suspend fun createSession(request: CreateSessionRequest): Session =
         execute(newRequest("POST", "/session", body = jsonBody(request)), Session.serializer())
@@ -257,6 +324,21 @@ class OpenCodeClient(
 
     suspend fun abort(sessionId: String) =
         executeUnit("POST", "/session/$sessionId/abort")
+
+    /**
+     * Rolls the session back to just before [messageId]: the message and all
+     * after it are hidden and the files the agent changed since are restored.
+     * The server refuses while the session is busy.
+     */
+    suspend fun revert(sessionId: String, messageId: String): Session =
+        execute(
+            newRequest("POST", "/session/$sessionId/revert", body = jsonBody(RevertRequest(messageID = messageId))),
+            Session.serializer(),
+        )
+
+    /** Undoes [revert]: the hidden messages and file changes come back. */
+    suspend fun unrevert(sessionId: String): Session =
+        execute(newRequest("POST", "/session/$sessionId/unrevert"), Session.serializer())
 
     suspend fun listPermissions(): List<PermissionRequest> =
         execute(newRequest("GET", "/permission"), ListSerializer(PermissionRequest.serializer()))
@@ -388,6 +470,14 @@ class OpenCodeClient(
 
     companion object {
         private const val TAG = "OpenCodeClient"
+        private const val DIRECTORY_QUERY = "directory"
+        private const val ALL_SESSIONS_LIMIT = 5000
+        private const val FIND_LIMIT = 50
+
+        /** The `/global/` and `/api/` routes are not tied to an instance. */
+        private fun isInstanceScoped(path: String): Boolean =
+            !path.startsWith("/global/") && !path.startsWith("/api/")
+
         private const val MAX_ERROR_CHARS = 300
 
         /**

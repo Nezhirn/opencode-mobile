@@ -156,6 +156,39 @@ class SettingsStore(private val context: Context) : SettingsSource {
         }
     }
 
+    override fun savedProjects(serverUrl: String): Flow<Set<String>> =
+        data.map { prefs -> prefs[savedProjectsKey(serverUrl)].orEmpty() }
+
+    override suspend fun saveSavedProjects(serverUrl: String, directories: Set<String>) {
+        context.dataStore.edit { prefs -> prefs[savedProjectsKey(serverUrl)] = directories }
+    }
+
+    override fun hiddenProjects(serverUrl: String): Flow<Set<String>> =
+        data.map { prefs -> prefs[hiddenProjectsKey(serverUrl)].orEmpty() }
+
+    override suspend fun saveHiddenProjects(serverUrl: String, directories: Set<String>) {
+        context.dataStore.edit { prefs -> prefs[hiddenProjectsKey(serverUrl)] = directories }
+    }
+
+    override fun lastProject(serverUrl: String): Flow<String?> =
+        data.map { prefs -> prefs[lastProjectKey(serverUrl)]?.takeIf { it.isNotBlank() } }
+
+    override suspend fun saveLastProject(serverUrl: String, directory: String?) {
+        context.dataStore.edit { prefs ->
+            val key = lastProjectKey(serverUrl)
+            if (directory.isNullOrBlank()) prefs.remove(key) else prefs[key] = directory
+        }
+    }
+
+    private fun savedProjectsKey(serverUrl: String) =
+        stringSetPreferencesKey("saved_projects@${OpenCodeClient.normalizeBaseUrl(serverUrl)}")
+
+    private fun hiddenProjectsKey(serverUrl: String) =
+        stringSetPreferencesKey("hidden_projects@${OpenCodeClient.normalizeBaseUrl(serverUrl)}")
+
+    private fun lastProjectKey(serverUrl: String) =
+        stringPreferencesKey("last_project@${OpenCodeClient.normalizeBaseUrl(serverUrl)}")
+
     private companion object {
         const val TAG = "SettingsStore"
         const val DEFAULT_USERNAME = "opencode"

@@ -4,6 +4,7 @@ import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ConnectionState
 import ai.opencode.mobile.data.remote.Session
 import ai.opencode.mobile.ui.asString
+import ai.opencode.mobile.ui.components.Banner
 import ai.opencode.mobile.ui.mcp.McpButton
 import ai.opencode.mobile.ui.mcp.McpSheet
 import android.app.Activity
@@ -22,8 +23,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
@@ -38,7 +39,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -64,6 +64,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionsScreen(
+    onBack: () -> Unit,
     onOpenSession: (String) -> Unit,
     onOpenFiles: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -79,6 +80,7 @@ fun SessionsScreen(
     val deleting by viewModel.deletingSessions.collectAsStateWithLifecycle()
     val sessionError by viewModel.sessionError.collectAsStateWithLifecycle()
     val mcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
+    val project by viewModel.project.collectAsStateWithLifecycle()
     var pendingDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
     var showMcp by rememberSaveable { mutableStateOf(false) }
 
@@ -129,7 +131,29 @@ fun SessionsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.sessions_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_back))
+                    }
+                },
+                title = {
+                    Column {
+                        Text(
+                            text = project?.name ?: stringResource(R.string.sessions_title),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        project?.let {
+                            Text(
+                                text = it.directory,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                },
                 actions = {
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.sessions_refresh))
@@ -319,38 +343,6 @@ private fun SessionRow(session: Session, deleting: Boolean, onClick: () -> Unit,
         } else {
             IconButton(onClick = onDelete) {
                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.sessions_delete))
-            }
-        }
-    }
-}
-
-@Composable
-private fun Banner(
-    text: String,
-    container: androidx.compose.ui.graphics.Color,
-    content: androidx.compose.ui.graphics.Color,
-    onDismiss: (() -> Unit)? = null,
-) {
-    Surface(
-        color = container,
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = text,
-                color = content,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(12.dp),
-            )
-            if (onDismiss != null) {
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_dismiss), tint = content)
-                }
             }
         }
     }

@@ -1,25 +1,62 @@
 package ai.opencode.mobile.ui.chat
 
 import ai.opencode.mobile.data.AppRepository
+import ai.opencode.mobile.data.Attachment
+import ai.opencode.mobile.data.ContextStats
+import ai.opencode.mobile.data.EditDraft
+import ai.opencode.mobile.data.UiText
+import ai.opencode.mobile.data.contextStats
+import ai.opencode.mobile.data.contextUsagePercent
+import ai.opencode.mobile.data.remote.FileNode
 import ai.opencode.mobile.data.remote.PromptModel
 import ai.opencode.mobile.ui.repository
+import android.content.ContentResolver
+import android.net.Uri
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicLong
+
+/** State of the "attach a project file" picker. */
+data class FilePickerState(
+    /** Folder being browsed, relative to the project root ("" is the root). */
+    val path: String = "",
+    val entries: List<FileNode> = emptyList(),
+    val loading: Boolean = false,
+    val failed: Boolean = false,
+    val query: String = "",
+    /** Search matches, relative to the project root. */
+    val found: List<String> = emptyList(),
+)
 
 class ChatViewModel(
     private val repository: AppRepository,
     private val savedState: SavedStateHandle,
+    private val contentResolver: ContentResolver,
 ) : ViewModel() {
 
     val chat = repository.chat
@@ -60,6 +97,50 @@ class ChatViewModel(
 
     private val sessionId = MutableStateFlow<String?>(null)
 
+    /**
+     * Files to send with the prompt. Memory only: they can be megabytes, far
+     * too much for saved state.
+     */
+    private val _attachments = MutableStateFlow<List<Attachment>>(emptyList())
+    val attachments: StateFlow<List<Attachment>> = _attachments.asStateFlow()
+
+    /** Previews of image attachments by attachment id. */
+    private val _thumbnails = MutableStateFlow<Map<String, ImageBitmap>>(emptyMap())
+    val thumbnails: StateFlow<Map<String, ImageBitmap>> = _thumbnails.asStateFlow()
+
+    /** Why a file could not be attached; shown until dismissed. */
+    private val _attachError = MutableStateFlow<UiText?>(null)
+    val attachError: StateFlow<UiText?> = _attachError.asStateFlow()
+
+    private val attachmentCounter = AtomicLong()
+
+    /** Asks the screen to focus the prompt field (after "edit"). */
+    private val _focusPrompt = Channel<Unit>(Channel.CONFLATED)
+    val focusPrompt: Flow<Unit> = _focusPrompt.receiveAsFlow()
+
+    /** The open session as listed (cost, dates for the context panel). */
+    private val session = combine(repository.sessions, sessionId) { sessions, id -> sessions.firstOrNull { it.id == id } }
+
+    /** Context window use in percent for the top bar; null when unknown. */
+    val contextUsage: StateFlow<Int?> = combine(repository.chat, repository.providers) { chat, providers ->
+        contextUsagePercent(chat.visibleMessages, providers)
+    }
+        .conflate()
+        .distinctUntilChanged()
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * The context panel's figures. Only computed while the panel collects them:
+     * the breakdown walks the text of the whole chat, too much for every token.
+     */
+    val contextStats: StateFlow<ContextStats?> = combine(repository.chat, session, repository.providers) { chat, session, providers ->
+        contextStats(chat.visibleMessages, session, providers)
+    }
+        .conflate()
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), null)
+
     val permissions = combine(repository.permissions, sessionId) { list, id ->
         if (id == null) emptyList() else list.filter { repository.sessionMatches(it.sessionID, id) }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -93,12 +174,154 @@ class ChatViewModel(
      */
     fun send() {
         val text = draft.value
-        if (text.isBlank()) return
+        val files = _attachments.value
+        if (text.isBlank() && files.isEmpty()) return
         setDraft("")
+        _attachments.value = emptyList()
         viewModelScope.launch {
-            val accepted = repository.sendPrompt(text).await()
-            if (!accepted && draft.value.isEmpty()) setDraft(text)
+            val accepted = repository.sendPrompt(text, files).await()
+            if (!accepted && draft.value.isEmpty() && _attachments.value.isEmpty()) {
+                setDraft(text)
+                _attachments.value = files
+            } else {
+                dropThumbnailsExcept(_attachments.value)
+            }
         }
+    }
+
+    // --- Attachments ---
+
+    private fun nextAttachmentId() = "attachment-${attachmentCounter.incrementAndGet()}"
+
+    /** Files picked on the phone; each is read off the main thread. */
+    fun addDeviceFiles(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        _attachError.value = null
+        viewModelScope.launch {
+            uris.forEach { uri ->
+                when (val result = readDeviceFile(contentResolver, uri, nextAttachmentId())) {
+                    is DeviceFileResult.Ok -> addAttachment(result.attachment, result.thumbnail)
+                    is DeviceFileResult.Failed -> _attachError.value = result.message
+                }
+            }
+        }
+    }
+
+    /** A project file, sent by path: the server reads it itself. */
+    fun addProjectFile(relativePath: String) {
+        val root = repository.currentDirectory.value ?: return
+        val path = relativePath.trimStart('/').trimEnd('/')
+        if (path.isEmpty()) return
+        val absolute = if (root == "/") "/$path" else "$root/$path"
+        addAttachment(
+            Attachment(
+                id = nextAttachmentId(),
+                filename = path,
+                mime = projectFileMime(path),
+                url = "file://$absolute",
+            ),
+            thumbnail = null,
+        )
+    }
+
+    private fun addAttachment(attachment: Attachment, thumbnail: ImageBitmap?) {
+        // The same file twice is a mistake, not a request.
+        if (_attachments.value.any { it.url == attachment.url }) return
+        _attachments.update { it + attachment }
+        if (thumbnail != null) _thumbnails.update { it + (attachment.id to thumbnail) }
+    }
+
+    fun removeAttachment(id: String) {
+        _attachments.update { list -> list.filterNot { it.id == id } }
+        _thumbnails.update { it - id }
+    }
+
+    fun clearAttachError() {
+        _attachError.value = null
+    }
+
+    private fun dropThumbnailsExcept(kept: List<Attachment>) {
+        val ids = kept.mapTo(HashSet()) { it.id }
+        _thumbnails.update { map -> map.filterKeys { it in ids } }
+    }
+
+    // --- Project file picker ---
+
+    private val _filePicker = MutableStateFlow(FilePickerState())
+    val filePicker: StateFlow<FilePickerState> = _filePicker.asStateFlow()
+    private var browseJob: Job? = null
+    private var searchJob: Job? = null
+
+    fun openFilePicker() {
+        _filePicker.update { it.copy(query = "", found = emptyList()) }
+        browseFiles(_filePicker.value.path)
+    }
+
+    fun browseFiles(path: String) {
+        browseJob?.cancel()
+        browseJob = viewModelScope.launch {
+            _filePicker.update { it.copy(loading = true, failed = false) }
+            val entries = repository.listFiles(path)
+            repository.clearActionError()
+            _filePicker.update { state ->
+                if (entries == null) {
+                    state.copy(loading = false, failed = true)
+                } else {
+                    state.copy(
+                        loading = false,
+                        path = path,
+                        entries = entries.sortedWith(compareBy<FileNode> { it.type != "directory" }.thenBy { it.name.lowercase() }),
+                        query = "",
+                        found = emptyList(),
+                    )
+                }
+            }
+        }
+    }
+
+    fun browseFilesUp() {
+        val path = _filePicker.value.path.trimEnd('/')
+        if (path.isEmpty()) return
+        browseFiles(path.substringBeforeLast('/', ""))
+    }
+
+    fun onFileQueryChange(query: String) {
+        _filePicker.update { it.copy(query = query, found = if (query.isBlank()) emptyList() else it.found) }
+        searchJob?.cancel()
+        if (query.isBlank()) return
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MILLIS)
+            val found = repository.findFiles(query.trim())
+            _filePicker.update { state -> if (state.query == query) state.copy(found = found) else state }
+        }
+    }
+
+    // --- Edit and rollback ---
+
+    /** Rolls back to before [messageId] and puts the message into the prompt to edit. */
+    fun edit(messageId: String) {
+        viewModelScope.launch {
+            val draft = repository.revertTo(messageId).await() ?: return@launch
+            applyDraft(draft)
+            _focusPrompt.trySend(Unit)
+        }
+    }
+
+    /** Brings a rolled back message back; the prompt follows the web client's rules. */
+    fun restore(messageId: String) {
+        viewModelScope.launch {
+            val draft = repository.restoreMessage(messageId).await() ?: return@launch
+            applyDraft(draft)
+        }
+    }
+
+    private suspend fun applyDraft(draft: EditDraft) {
+        setDraft(draft.text)
+        _attachments.value = draft.attachments
+        val previews = withContext(Dispatchers.Default) {
+            draft.attachments.mapNotNull { attachment -> thumbnailOf(attachment)?.let { attachment.id to it } }.toMap()
+        }
+        _thumbnails.value = previews
     }
 
     fun abort() = repository.abort()
@@ -127,9 +350,12 @@ class ChatViewModel(
     companion object {
         private const val DRAFT_KEY = "draft"
         private const val MAX_SAVED_DRAFT_CHARS = 50_000
+        private const val SEARCH_DEBOUNCE_MILLIS = 250L
 
         val Factory = viewModelFactory {
-            initializer { ChatViewModel(repository(), createSavedStateHandle()) }
+            initializer {
+                ChatViewModel(repository(), createSavedStateHandle(), checkNotNull(this[APPLICATION_KEY]).contentResolver)
+            }
         }
     }
 }

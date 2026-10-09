@@ -4,6 +4,7 @@ import ai.opencode.mobile.OpenCodeApplication
 import ai.opencode.mobile.ui.chat.ChatScreen
 import ai.opencode.mobile.ui.connect.ConnectScreen
 import ai.opencode.mobile.ui.files.FilesScreen
+import ai.opencode.mobile.ui.projects.ProjectsScreen
 import ai.opencode.mobile.ui.sessions.SessionsScreen
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,9 +45,21 @@ fun AppRoot() {
 
     val navController = rememberNavController()
 
-    NavHost(navController = navController, startDestination = "sessions") {
-        composable("sessions") {
+    NavHost(navController = navController, startDestination = "projects") {
+        composable("projects") {
+            ProjectsScreen(
+                onOpenProject = {
+                    navController.navigate("sessions") { launchSingleTop = true }
+                },
+                onOpenSettings = {
+                    navController.navigate("settings") { launchSingleTop = true }
+                },
+            )
+        }
+
+        composable("sessions") { entry ->
             SessionsScreen(
+                onBack = { navController.popIfCurrent(entry) },
                 onOpenSession = { sessionId ->
                     navController.navigate("chat/$sessionId") { launchSingleTop = true }
                 },

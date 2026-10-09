@@ -29,7 +29,21 @@ data class Session(
     val tokens: JsonObject? = null,
     val version: String = "",
     val time: SessionTime? = null,
-    val revert: JsonObject? = null,
+    val revert: SessionRevert? = null,
+)
+
+/**
+ * Where a session was rolled back to: [messageID] and everything after it are
+ * hidden until the next prompt deletes them for good, or an unrevert restores
+ * them. With [partID] set the message itself stays, cut before that part.
+ */
+@Serializable
+@Immutable
+data class SessionRevert(
+    @SerialName("messageID") val messageID: String = "",
+    @SerialName("partID") val partID: String? = null,
+    val snapshot: String? = null,
+    val diff: String? = null,
 )
 
 @Serializable
@@ -151,10 +165,18 @@ data class PromptModel(
     @SerialName("modelID") val modelID: String,
 )
 
+/**
+ * One part of a prompt: `text` carries [text]; `file` carries [mime], [url]
+ * (a `data:` URL with the content, or `file://` + an absolute path the server
+ * reads itself) and [filename]. Null fields are left out of the JSON.
+ */
 @Serializable
-data class TextPartInput(
+data class PromptPart(
     val type: String,
-    val text: String,
+    val text: String? = null,
+    val mime: String? = null,
+    val url: String? = null,
+    val filename: String? = null,
 )
 
 @Serializable
@@ -166,7 +188,13 @@ data class PromptRequest(
     val system: String? = null,
     /** A key of [Model.variants]; null runs the model with its defaults. */
     val variant: String? = null,
-    val parts: List<TextPartInput> = emptyList(),
+    val parts: List<PromptPart> = emptyList(),
+)
+
+@Serializable
+data class RevertRequest(
+    @SerialName("messageID") val messageID: String,
+    @SerialName("partID") val partID: String? = null,
 )
 
 @Serializable
@@ -246,6 +274,13 @@ data class Model(
      * provider options they map to and are of no use to the client.
      */
     val variants: Map<String, JsonObject> = emptyMap(),
+    val limit: ModelLimit? = null,
+)
+
+@Serializable
+data class ModelLimit(
+    val context: Long = 0,
+    val output: Long = 0,
 )
 
 @Serializable
@@ -278,6 +313,59 @@ data class Agent(
     val description: String? = null,
     val mode: String = "all",
     val hidden: Boolean? = null,
+)
+
+/** An opencode project: a git repository (keyed by its root commit) or `global`. */
+@Serializable
+@Immutable
+data class Project(
+    val id: String = "",
+    val worktree: String = "",
+    val vcs: String? = null,
+    val name: String? = null,
+    val icon: ProjectIcon? = null,
+    val time: SessionTime? = null,
+)
+
+@Serializable
+data class ProjectIcon(
+    val url: String? = null,
+    val color: String? = null,
+)
+
+/** `GET /path`: the server's home directory and the directory of the instance asked. */
+@Serializable
+data class PathInfo(
+    val home: String = "",
+    val state: String = "",
+    val config: String = "",
+    val worktree: String = "",
+    val directory: String = "",
+)
+
+/**
+ * A session as listed by `GET /api/session`, which unlike `GET /session` spans
+ * every project. Only what the project list needs is read.
+ */
+@Serializable
+data class SessionSummary(
+    val id: String = "",
+    @SerialName("projectID") val projectID: String = "",
+    @SerialName("parentID") val parentID: String? = null,
+    val title: String = "",
+    val time: SessionTime? = null,
+    val location: SessionLocation? = null,
+    val directory: String? = null,
+)
+
+@Serializable
+data class SessionLocation(
+    val directory: String = "",
+)
+
+@Serializable
+data class SessionSummaryPage(
+    val data: List<SessionSummary> = emptyList(),
 )
 
 @Serializable

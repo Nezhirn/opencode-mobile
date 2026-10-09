@@ -20,7 +20,7 @@ class PromptRequestSerializationTest {
 
     @Test
     fun textPartAlwaysSerializesItsType() {
-        val request = PromptRequest(parts = listOf(TextPartInput(type = "text", text = "hi")))
+        val request = PromptRequest(parts = listOf(PromptPart(type = "text", text = "hi")))
         val body = json.encodeToString(PromptRequest.serializer(), request)
 
         assertTrue("body must contain the part type: $body", body.contains("\"type\":\"text\""))
@@ -29,7 +29,7 @@ class PromptRequestSerializationTest {
 
     @Test
     fun absentOptionalFieldsAreOmitted() {
-        val request = PromptRequest(parts = listOf(TextPartInput(type = "text", text = "hi")))
+        val request = PromptRequest(parts = listOf(PromptPart(type = "text", text = "hi")))
         val body = json.encodeToString(PromptRequest.serializer(), request)
 
         assertFalse("model must be omitted when null: $body", body.contains("\"model\""))
@@ -41,7 +41,7 @@ class PromptRequestSerializationTest {
         val request = PromptRequest(
             model = PromptModel(providerID = "anthropic", modelID = "claude"),
             agent = "build",
-            parts = listOf(TextPartInput(type = "text", text = "hi")),
+            parts = listOf(PromptPart(type = "text", text = "hi")),
         )
         val body = json.encodeToString(PromptRequest.serializer(), request)
 
@@ -52,11 +52,26 @@ class PromptRequestSerializationTest {
 
     @Test
     fun serializesVariantOnlyWhenPicked() {
-        val parts = listOf(TextPartInput(type = "text", text = "hi"))
+        val parts = listOf(PromptPart(type = "text", text = "hi"))
         val withVariant = json.encodeToString(PromptRequest.serializer(), PromptRequest(variant = "high", parts = parts))
         val without = json.encodeToString(PromptRequest.serializer(), PromptRequest(parts = parts))
 
         assertTrue("variant missing: $withVariant", withVariant.contains("\"variant\":\"high\""))
         assertFalse("variant must be omitted when null: $without", without.contains("\"variant\""))
+    }
+
+    @Test
+    fun filePartCarriesOnlyItsFields() {
+        val request = PromptRequest(
+            parts = listOf(
+                PromptPart(type = "text", text = "look"),
+                PromptPart(type = "file", mime = "image/png", url = "data:image/png;base64,AA==", filename = "a.png"),
+            ),
+        )
+
+        val encoded = json.encodeToString(PromptRequest.serializer(), request)
+
+        assertTrue(encoded.contains("""{"type":"file","mime":"image/png","url":"data:image/png;base64,AA==","filename":"a.png"}"""))
+        assertTrue(encoded.contains("""{"type":"text","text":"look"}"""))
     }
 }

@@ -170,4 +170,80 @@
     <string name="notice_model_replaced">%1$s не настроена в opencode; используется %2$s.</string>
     <string name="notice_model_missing">%1$s не настроена в opencode.</string>
     <string name="notice_agent_missing">Агент %1$s недоступен в opencode; используется агент по умолчанию.</string>
+
+    <!-- Projects -->
+    <string name="projects_title">Проекты</string>
+    <string name="projects_add">Добавить проект</string>
+    <string name="projects_add_hint">Выберите папку на сервере. Сессии, файлы и работа агента будут в ней.</string>
+    <string name="projects_search_folders">Поиск папок</string>
+    <string name="projects_pick_folder">Открыть эту папку</string>
+    <string name="projects_no_folders">Здесь нет папок</string>
+    <string name="projects_folder_unreadable">Не удалось прочитать эту папку</string>
+    <string name="projects_empty">Проектов пока нет. Нажмите кнопку с папкой, чтобы добавить.</string>
+    <string name="projects_hide">Убрать из списка</string>
+    <plurals name="projects_sessions">
+        <item quantity="one">%1$d сессия</item>
+        <item quantity="few">%1$d сессии</item>
+        <item quantity="many">%1$d сессий</item>
+        <item quantity="other">%1$d сессии</item>
+    </plurals>
+    <string name="error_load_projects">Не удалось загрузить проекты</string>
+
+    <!-- Attachments -->
+    <string name="attach_file">Прикрепить</string>
+    <string name="attach_from_device">С телефона</string>
+    <string name="attach_from_project">Из проекта</string>
+    <string name="attach_remove">Удалить вложение</string>
+    <string name="attach_project_title">Файл проекта</string>
+    <string name="attach_search_files">Поиск файлов</string>
+    <string name="attach_no_files">Файлы не найдены</string>
+    <string name="error_attachment_too_large">%1$s больше %2$d МБ</string>
+    <string name="error_attachment_read">Не удалось прочитать %1$s</string>
+    <string name="error_attachment_type">%1$s нельзя прикрепить: только изображения, PDF и текстовые файлы</string>
+
+    <!-- Context -->
+    <string name="context_title">Контекст</string>
+    <string name="context_view">Показать использование контекста</string>
+    <string name="context_empty">Ответов модели пока нет</string>
+    <string name="context_session">Сессия</string>
+    <string name="context_messages">Сообщения</string>
+    <string name="context_provider">Провайдер</string>
+    <string name="context_model">Модель</string>
+    <string name="context_limit">Лимит контекста</string>
+    <string name="context_total_tokens">Всего токенов</string>
+    <string name="context_usage">Использование</string>
+    <string name="context_input_tokens">Входные токены</string>
+    <string name="context_output_tokens">Выходные токены</string>
+    <string name="context_reasoning_tokens">Токены рассуждения</string>
+    <string name="context_cache_tokens">Токены кеша (чтение/запись)</string>
+    <string name="context_user_messages">Сообщения пользователя</string>
+    <string name="context_assistant_messages">Сообщения ассистента</string>
+    <string name="context_total_cost">Общая стоимость</string>
+    <string name="context_created">Сессия создана</string>
+    <string name="context_last_activity">Последняя активность</string>
+    <string name="context_breakdown">Разбивка контекста</string>
+    <string name="context_breakdown_system">Система</string>
+    <string name="context_breakdown_user">Пользователь</string>
+    <string name="context_breakdown_assistant">Ассистент</string>
+    <string name="context_breakdown_tool">Вызовы инструментов</string>
+    <string name="context_breakdown_other">Другое</string>
+    <string name="context_breakdown_hint">Оценка по тексту сообщений</string>
+    <string name="context_system_prompt">Системный промпт</string>
+
+    <!-- Edit and revert -->
+    <string name="message_copy">Копировать</string>
+    <string name="message_edit">Редактировать</string>
+    <string name="message_copied">Скопировано</string>
+    <plurals name="revert_summary">
+        <item quantity="one">%1$d сообщение возвращено</item>
+        <item quantity="few">%1$d сообщения возвращены</item>
+        <item quantity="many">%1$d сообщений возвращено</item>
+        <item quantity="other">%1$d сообщения возвращено</item>
+    </plurals>
+    <string name="revert_hint">Отправьте новое сообщение, чтобы заменить их; изменения файлов после этой точки тоже отменены.</string>
+    <string name="revert_restore">Восстановить</string>
+    <string name="revert_expand">Показать возвращённые сообщения</string>
+    <string name="revert_collapse">Скрыть возвращённые сообщения</string>
+    <string name="error_revert">Не удалось откатить сессию</string>
+    <string name="error_unrevert">Не удалось восстановить сообщения</string>
 </resources>

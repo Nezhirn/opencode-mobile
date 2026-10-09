@@ -9,6 +9,7 @@ import ai.opencode.mobile.data.remote.OpenCodeClient
 import ai.opencode.mobile.data.remote.OpenCodeJson
 import ai.opencode.mobile.data.remote.Part
 import ai.opencode.mobile.data.remote.Session
+import ai.opencode.mobile.data.remote.SessionRevert
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -405,5 +406,31 @@ class AppRepositoryEventsTest {
         // The failure is shown, but the parent's run (and its Stop button) goes on.
         assertTrue(repository.chat.value.busy)
         assertTrue(repository.chat.value.error != null)
+    }
+
+    @Test
+    fun sessionUpdateCarriesTheRollbackIntoTheChat() = runBlocking {
+        val repository = repository()
+        repository.setChatForTest(ChatState(sessionId = "ses_1"))
+
+        repository.handleEvent(
+            client,
+            event(
+                "session.updated",
+                buildJsonObject {
+                    put(
+                        "info",
+                        OpenCodeJson.encodeToJsonElement(
+                            Session.serializer(),
+                            Session(id = "ses_1", revert = SessionRevert(messageID = "msg_2")),
+                        ),
+                    )
+                },
+            ),
+        )
+        assertEquals("msg_2", repository.chat.value.revert?.messageID)
+
+        repository.handleEvent(client, event("session.updated", buildJsonObject { put("info", sessionInfo("ses_1")) }))
+        assertNull(repository.chat.value.revert)
     }
 }
