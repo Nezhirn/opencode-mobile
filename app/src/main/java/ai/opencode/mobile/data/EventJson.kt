@@ -62,10 +62,17 @@ internal fun formatSessionError(info: SessionErrorInfo?, raw: JsonElement?): UiT
         !serverMessage.isNullOrBlank() && !name.isNullOrBlank() -> UiText.Raw("$name: $serverMessage")
         !serverMessage.isNullOrBlank() -> UiText.Raw(serverMessage)
         !name.isNullOrBlank() -> UiText.Raw(name)
-        raw != null -> UiText.Raw(raw.toString())
+        raw != null -> UiText.Raw(raw.toString().let { if (it.length <= MAX_RAW_ERROR_CHARS) it else it.take(MAX_RAW_ERROR_CHARS) + "…" })
         else -> uiText(R.string.error_session)
     }
 }
+
+/** The error an assistant message ended with, as a readable line rather than its JSON. */
+internal fun messageErrorText(error: JsonObject): UiText =
+    formatSessionError(error.decodeOrNull(SessionErrorInfo.serializer()), error)
+
+/** A server error without name or message is shown raw, but not a whole HTML page of it. */
+private const val MAX_RAW_ERROR_CHARS = 500
 
 /** True for the session status types during which a run is in progress. */
 internal fun isBusyStatus(type: String?): Boolean = type == "busy" || type == "retry"

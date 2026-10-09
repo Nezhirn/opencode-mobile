@@ -126,8 +126,11 @@ class OpenCodeClient(
      * ignored cancellation: switching servers waited for a hung request of the
      * old one to time out (up to two minutes), and abandoned loads kept
      * downloading in the background.
+     *
+     * Bodies larger than [maxBodyBytes] are refused instead of read: the whole
+     * body is held in memory, and a huge file or diff ran the app out of it.
      */
-    private suspend fun fetch(request: Request): HttpResult {
+    private suspend fun fetch(request: Request, maxBodyBytes: Long = MAX_BODY_BYTES): HttpResult {
         // A POST that already reached the server must not be replayed after a
         // connection reset: a repeated prompt_async runs the prompt twice.
         val http = if (request.method == "GET") client else noRetryClient
@@ -142,9 +145,15 @@ class OpenCodeClient(
 
                     override fun onResponse(call: Call, response: Response) {
                         // Read on OkHttp's thread: call.cancel() aborts this read.
+                        // Everything is caught: OkHttp rethrows what escapes a
+                        // callback on its own thread, which kills the process, and
+                        // the coroutine would never resume.
                         val result = try {
-                            response.use { HttpResult(it.code, it.message, it.isSuccessful, it.body?.string().orEmpty()) }
-                        } catch (error: IOException) {
+                            response.use { HttpResult(it.code, it.message, it.isSuccessful, it.readBody(maxBodyBytes)) }
+                        } catch (error: OutOfMemoryError) {
+                            continuation.resumeWithException(ResponseTooLargeException(maxBodyBytes))
+                            return
+                        } catch (error: Throwable) {
                             continuation.resumeWithException(error)
                             return
                         }
@@ -158,8 +167,9 @@ class OpenCodeClient(
     private suspend fun <T> execute(
         request: Request,
         deserializer: DeserializationStrategy<T>,
+        maxBodyBytes: Long = MAX_BODY_BYTES,
     ): T {
-        val response = fetch(request)
+        val response = fetch(request, maxBodyBytes)
         val text = response.text
         if (!response.isSuccessful) {
             throw OpenCodeException(response.code, extractError(text, response.message))
@@ -175,7 +185,13 @@ class OpenCodeClient(
         }
         // Large payloads (message history, files) must not be decoded on the
         // caller's thread, which may be the main one.
-        return withContext(Dispatchers.Default) { json.decodeFromString(deserializer, text) }
+        return withContext(Dispatchers.Default) {
+            try {
+                json.decodeFromString(deserializer, text)
+            } catch (error: OutOfMemoryError) {
+                throw ResponseTooLargeException(maxBodyBytes)
+            }
+        }
     }
 
     private suspend fun executeUnit(
@@ -191,8 +207,16 @@ class OpenCodeClient(
         }
     }
 
-    private fun requestTimeoutMillis(request: Request): Long =
-        if (request.url.encodedPath.endsWith("/event")) 0 else 120_000
+    /**
+     * The whole call, upload included, must finish within this. A prompt with
+     * attachments can carry tens of megabytes, which a slow uplink does not send
+     * in two minutes: such calls get extra time for their size.
+     */
+    private fun requestTimeoutMillis(request: Request): Long {
+        if (request.url.encodedPath.endsWith("/event")) return 0
+        val bodyBytes = request.body?.contentLength()?.coerceAtLeast(0) ?: 0
+        return REQUEST_TIMEOUT_MILLIS + bodyBytes / UPLOAD_BYTES_PER_EXTRA_SECOND * 1_000
+    }
 
     private fun extractError(text: String, fallback: String): String {
         if (text.isBlank()) return fallback
@@ -306,10 +330,14 @@ class OpenCodeClient(
     suspend fun deleteSession(sessionId: String) =
         executeUnit("DELETE", "/session/$sessionId")
 
+    suspend fun getSession(sessionId: String): Session =
+        execute(newRequest("GET", "/session/$sessionId"), Session.serializer())
+
     suspend fun getMessages(sessionId: String): List<MessageWithParts> =
         execute(
             newRequest("GET", "/session/$sessionId/message"),
             ListSerializer(MessageWithParts.serializer()),
+            maxBodyBytes = MAX_HISTORY_BYTES,
         )
 
     suspend fun promptAsync(sessionId: String, request: PromptRequest) =
@@ -384,6 +412,7 @@ class OpenCodeClient(
         execute(
             newRequest("GET", "/file/content", query = mapOf("path" to path)),
             FileContent.serializer(),
+            maxBodyBytes = MAX_FILE_BYTES,
         )
 
     suspend fun vcsInfo(): VcsInfo = execute(newRequest("GET", "/vcs"), VcsInfo.serializer())
@@ -395,12 +424,14 @@ class OpenCodeClient(
         execute(
             newRequest("GET", "/vcs/diff", query = mapOf("mode" to mode)),
             ListSerializer(VcsFileDiff.serializer()),
+            maxBodyBytes = MAX_DIFF_BYTES,
         )
 
     suspend fun sessionDiff(sessionId: String): List<VcsFileDiff> =
         execute(
             newRequest("GET", "/session/$sessionId/diff"),
             ListSerializer(VcsFileDiff.serializer()),
+            maxBodyBytes = MAX_DIFF_BYTES,
         )
 
     /** Status of every MCP server opencode knows about, keyed by name. */
@@ -480,6 +511,21 @@ class OpenCodeClient(
 
         private const val MAX_ERROR_CHARS = 300
 
+        private const val REQUEST_TIMEOUT_MILLIS = 120_000L
+
+        /** ~1 Mbit/s: every 128 KB of request body adds a second to the timeout. */
+        private const val UPLOAD_BYTES_PER_EXTRA_SECOND = 128L * 1024
+
+        private const val MB = 1024L * 1024L
+
+        /** Default cap on a response body; bodies are read into memory whole. */
+        internal const val MAX_BODY_BYTES = 32 * MB
+
+        /** A chat's history carries every file sent in it, base64-encoded. */
+        internal const val MAX_HISTORY_BYTES = 64 * MB
+        internal const val MAX_FILE_BYTES = 8 * MB
+        internal const val MAX_DIFF_BYTES = 16 * MB
+
         /**
          * Synthetic event emitted by [events] once the server accepted the
          * subscription (response headers received), before any real event.
@@ -558,7 +604,11 @@ class OpenCodeClient(
         fun normalizeBaseUrl(input: String): String {
             var value = input.trim()
             if (value.isEmpty()) return value
-            if (!value.startsWith("http://") && !value.startsWith("https://")) {
+            val scheme = value.substringBefore("://", missingDelimiterValue = "")
+            if (scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)) {
+                // OkHttp accepts any case, but "HTTPS://" must not get a second scheme.
+                value = scheme.lowercase() + value.substring(scheme.length)
+            } else {
                 value = "http://$value"
             }
             return value.trimEnd('/')
@@ -567,6 +617,24 @@ class OpenCodeClient(
 }
 
 class OpenCodeException(val code: Int, override val message: String) : IOException(message)
+
+/** The server's answer was too large to hold in memory. */
+class ResponseTooLargeException(val limitBytes: Long) :
+    IOException("Response is larger than ${limitBytes / (1024 * 1024)} MB")
+
+/**
+ * The body as text, refusing more than [maxBytes]: a declared length is checked
+ * before reading, an undeclared one while reading, so the limit is never
+ * exceeded in memory.
+ */
+private fun Response.readBody(maxBytes: Long): String {
+    val body = body ?: return ""
+    val declared = body.contentLength()
+    if (declared > maxBytes) throw ResponseTooLargeException(maxBytes)
+    val source = body.source()
+    if (source.request(maxBytes + 1)) throw ResponseTooLargeException(maxBytes)
+    return source.buffer.readString(body.contentType()?.charset() ?: Charsets.UTF_8)
+}
 
 private fun JsonObject.stringOrNull(key: String): String? =
     (this[key] as? JsonPrimitive)?.contentOrNull

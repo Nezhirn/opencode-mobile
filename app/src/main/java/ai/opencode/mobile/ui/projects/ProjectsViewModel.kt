@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** State of the "add project" folder picker. */
 data class DirectoryPickerState(
@@ -63,6 +64,14 @@ class ProjectsViewModel(
             savedState[KEY_AUTO_OPENED] = true
             viewModelScope.launch {
                 val last = repository.lastProject() ?: return@launch
+                // A directory removed on the server would otherwise be reopened
+                // on every start, straight into errors. Only a clear "no" counts:
+                // offline (or slow) the project opens as before.
+                val exists = withTimeoutOrNull(PROJECT_CHECK_TIMEOUT_MILLIS) { repository.projectExists(last) }
+                if (exists == false) {
+                    repository.forgetLastProject(last)
+                    return@launch
+                }
                 repository.openProject(last)
                 _navigation.send(Unit)
             }
@@ -156,6 +165,7 @@ class ProjectsViewModel(
     companion object {
         private const val KEY_AUTO_OPENED = "auto_opened"
         private const val SEARCH_DEBOUNCE_MILLIS = 250L
+        private const val PROJECT_CHECK_TIMEOUT_MILLIS = 3_000L
 
         val Factory = viewModelFactory {
             initializer { ProjectsViewModel(repository(), createSavedStateHandle()) }

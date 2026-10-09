@@ -5,6 +5,7 @@ import ai.opencode.mobile.data.local.SettingsSource
 import ai.opencode.mobile.data.remote.OpenCodeClient
 import ai.opencode.mobile.data.remote.OpenCodeException
 import ai.opencode.mobile.data.remote.Project
+import ai.opencode.mobile.data.remote.Session
 import ai.opencode.mobile.data.remote.SessionLocation
 import ai.opencode.mobile.data.remote.SessionSummary
 import android.util.Log
@@ -23,6 +24,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.SerializationException
 
 /**
  * A working directory the user can open: a git project (its worktree) or a
@@ -98,25 +102,26 @@ internal class ProjectStore(
         val projects = catchingNonCancellation { client.listProjects() }
             .onFailure { Log.w(TAG, "listProjects failed", it) }
         val sessions = catchingNonCancellation { client.listAllSessions() }
-            .recoverCatching { error ->
-                if (error !is OpenCodeException || error.code != 404) throw error
-                client.listSessions().map { session ->
-                    SessionSummary(
-                        id = session.id,
-                        projectID = session.projectID,
-                        parentID = session.parentID,
-                        title = session.title,
-                        time = session.time,
-                        location = SessionLocation(session.directory),
-                    )
-                }
+            .let { result ->
+                // Old servers answer an unknown route with 404, or with the web
+                // client's HTML page (200, then not JSON).
+                val error = result.exceptionOrNull()
+                val unsupported = (error is OpenCodeException && error.code == 404) ||
+                    error is SerializationException
+                if (!unsupported) result else catchingNonCancellation { client.listSessions().map(::summaryOf) }
             }
             .onFailure { Log.w(TAG, "listing sessions of all projects failed", it) }
         if (!isCurrent()) return
-        val failure = if (projects.isFailure && sessions.isFailure) sessions.exceptionOrNull() else null
+        val failure = projects.exceptionOrNull() ?: sessions.exceptionOrNull()
         _error.value = failure?.toUiText(R.string.error_load_projects)
-        if (failure == null || remote.value == null) {
-            remote.value = RemoteProjects(projects.getOrNull().orEmpty(), sessions.getOrNull().orEmpty())
+        // A half that failed keeps what was read before: replacing it with
+        // nothing made git projects vanish, or every session count drop to 0.
+        val previous = remote.value
+        if (projects.isSuccess || sessions.isSuccess || previous == null) {
+            remote.value = RemoteProjects(
+                projects = projects.getOrNull() ?: previous?.projects.orEmpty(),
+                sessions = sessions.getOrNull() ?: previous?.sessions.orEmpty(),
+            )
         }
         _loaded.value = true
     }
@@ -131,12 +136,17 @@ internal class ProjectStore(
         _error.value = null
     }
 
+    /** Serialises [editLocal]: two quick edits read the same sets and one was lost. */
+    private val localEdits = Mutex()
+
     private fun editLocal(change: (Set<String>, Set<String>) -> Pair<Set<String>, Set<String>>) {
         val url = server.value ?: return
         scope.launch {
-            val (saved, hidden) = change(settings.savedProjects(url).first(), settings.hiddenProjects(url).first())
-            settings.saveSavedProjects(url, saved)
-            settings.saveHiddenProjects(url, hidden)
+            localEdits.withLock {
+                val (saved, hidden) = change(settings.savedProjects(url).first(), settings.hiddenProjects(url).first())
+                settings.saveSavedProjects(url, saved)
+                settings.saveHiddenProjects(url, hidden)
+            }
         }
     }
 
@@ -151,6 +161,15 @@ internal class ProjectStore(
 }
 
 internal const val GLOBAL_PROJECT_ID = "global"
+
+private fun summaryOf(session: Session) = SessionSummary(
+    id = session.id,
+    projectID = session.projectID,
+    parentID = session.parentID,
+    title = session.title,
+    time = session.time,
+    location = SessionLocation(session.directory),
+)
 
 /** [directory] without a trailing slash (the root stays "/"). */
 internal fun normalizeDirectory(directory: String): String {

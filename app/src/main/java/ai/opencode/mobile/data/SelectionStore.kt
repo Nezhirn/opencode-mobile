@@ -192,12 +192,41 @@ internal class SelectionStore(
                 fallback != null -> uiText(R.string.notice_model_replaced, current.label, fallback.label)
                 else -> uiText(R.string.notice_model_missing, current.label)
             }
-            // Only forget the stored pick when a usable replacement exists. Erasing
-            // it because the only configured provider happens to be down right now
-            // would lose the choice permanently.
-            current != null && fallback != null
+            // Only forget the stored pick when a usable replacement exists and the
+            // pick is what was stored. Erasing it because the only configured
+            // provider happens to be down right now would lose the choice for
+            // good; so would erasing it because this project lacks a provider
+            // the others have (providers come from each project's config).
+            current != null && fallback != null && !perProjectSelection
         }
         if (forgetStored) updateStoredSelection { it.copy(providerId = "", modelId = "") }
+    }
+
+    /**
+     * Set once the app has worked in more than one project of this server.
+     * Models and agents are configured per project, so a pick missing from one
+     * project is then not a pick that disappeared from the server.
+     */
+    @Volatile
+    private var perProjectSelection = false
+
+    /**
+     * Another project of the same server was opened. Its providers and agents
+     * load next; until then the previous project's lists must not be offered,
+     * and the pick goes back to the stored one, which a project without that
+     * model or agent replaced in memory only.
+     */
+    fun onProjectChanged() {
+        synchronized(lock) {
+            perProjectSelection = true
+            _agents.value = emptyList()
+            _providers.value = emptyList()
+            _providersLoaded.value = false
+            _notice.value = null
+            val stored = storedSelection
+            if (stored.hasModel) _selectedModel.value = PromptModel(stored.providerId, stored.modelId)
+            if (stored.agent.isNotBlank()) _selectedAgent.value = stored.agent
+        }
     }
 
     fun applyAgents(list: List<Agent>) {
@@ -211,7 +240,9 @@ internal class SelectionStore(
         if (agents.isNotEmpty() && agents.none { it.name == current }) {
             _selectedAgent.value = null
             _notice.value = uiText(R.string.notice_agent_missing, current)
-            updateStoredSelection { it.copy(agent = "") }
+            // Agents are often a project's own (.opencode/agent): one missing
+            // here is still there in the project it was picked in, so the stored
+            // pick stays and comes back with that project.
         }
     }
 
@@ -270,6 +301,7 @@ internal class SelectionStore(
             if (url == serverUrl) return
             val previous = serverUrl
             serverUrl = url
+            perProjectSelection = false
             if (previous != null && url != null) reloadSelectionFor(url)
             visibilityJob?.cancel()
             _enabledModels.value = null

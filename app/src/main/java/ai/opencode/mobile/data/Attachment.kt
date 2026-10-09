@@ -43,3 +43,25 @@ internal fun Part.toAttachment(): Attachment? {
         url = url,
     )
 }
+
+/**
+ * `file://` URL of an absolute server path, percent-encoded: the server turns
+ * it back into a path, and a `#`, `?` or `%` in a file name cut it short or
+ * broke it. Windows paths (`C:\\dir\\file`) become `file:///C:/dir/file`.
+ */
+internal fun fileUrlOf(path: String): String {
+    val windows = path.length >= 2 && path[1] == ':' && path[0].isLetter()
+    val normalized = if (windows) "/" + path.replace('\\', '/') else path
+    val encoded = StringBuilder("file://")
+    normalized.toByteArray(Charsets.UTF_8).forEach { byte ->
+        val char = (byte.toInt() and 0xFF).toChar()
+        if (char.code < 0x80 && (char.isLetterOrDigit() || char in URL_PATH_SAFE)) {
+            encoded.append(char)
+        } else {
+            encoded.append('%').append("%02X".format(byte.toInt() and 0xFF))
+        }
+    }
+    return encoded.toString()
+}
+
+private const val URL_PATH_SAFE = "/-._~!$&'()*+,;=:@"

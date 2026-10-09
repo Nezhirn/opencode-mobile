@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -107,50 +108,64 @@ fun MarkdownText(
  * janked the UI. Later texts are parsed in the background, the previous blocks
  * stay on screen meanwhile, and texts that arrive during a parse are conflated
  * to the newest — a parse is never restarted, so a long one still completes.
+ *
+ * A theme switch re-parses in the background too: keying the state on the
+ * colours parsed every visible message at once on the main thread.
  */
 @Composable
 private fun rememberMarkdownBlocks(source: String, colors: MarkdownColors): List<MdBlock> {
     val latest = rememberUpdatedState(source)
-    var parsed by remember(colors) { mutableStateOf(ParsedMarkdown(source, MarkdownCache.parse(source, colors))) }
+    var parsed by remember { mutableStateOf(ParsedMarkdown(source, colors, MarkdownCache.parse(source, colors))) }
     LaunchedEffect(colors) {
         snapshotFlow { latest.value }
             .conflate()
             .collect { text ->
-                if (text != parsed.source) {
-                    parsed = ParsedMarkdown(text, withContext(Dispatchers.Default) { MarkdownCache.parse(text, colors) })
+                if (text != parsed.source || colors != parsed.colors) {
+                    val blocks = withContext(Dispatchers.Default) { MarkdownCache.parse(text, colors, store = false) }
+                    parsed = ParsedMarkdown(text, colors, blocks)
                 }
             }
+    }
+    // Cached as the text leaves the screen, i.e. in its final form. Caching every
+    // streamed prefix pushed all other replies out of the cache, and scrolling
+    // back up then parsed each of them on the main thread.
+    DisposableEffect(Unit) {
+        onDispose {
+            val last = parsed
+            MarkdownCache.store(last.source, last.colors, last.blocks)
+        }
     }
     return parsed.blocks
 }
 
-private class ParsedMarkdown(val source: String, val blocks: List<MdBlock>)
+private class ParsedMarkdown(val source: String, val colors: MarkdownColors, val blocks: List<MdBlock>)
 
 /**
  * Recently parsed texts, so a reply scrolling back into view is not parsed
- * again on the main thread. Bounded by total characters, since every streamed
- * prefix of a long reply passes through here.
+ * again on the main thread. Bounded by total characters of the cached texts.
  */
 private object MarkdownCache {
     private const val MAX_CHARS = 1_000_000
     private var chars = 0
     private val entries = LinkedHashMap<Pair<String, MarkdownColors>, List<MdBlock>>(16, 0.75f, true)
 
-    fun parse(source: String, colors: MarkdownColors): List<MdBlock> {
-        val key = source to colors
-        synchronized(this) { entries[key] }?.let { return it }
+    fun parse(source: String, colors: MarkdownColors, store: Boolean = true): List<MdBlock> {
+        synchronized(this) { entries[source to colors] }?.let { return it }
         val blocks = parseMarkdown(source, colors)
-        if (source.length <= MAX_CHARS) {
-            synchronized(this) {
-                if (entries.put(key, blocks) == null) chars += source.length
-                val iterator = entries.entries.iterator()
-                while (chars > MAX_CHARS && iterator.hasNext()) {
-                    chars -= iterator.next().key.first.length
-                    iterator.remove()
-                }
+        if (store) store(source, colors, blocks)
+        return blocks
+    }
+
+    fun store(source: String, colors: MarkdownColors, blocks: List<MdBlock>) {
+        if (source.length > MAX_CHARS) return
+        synchronized(this) {
+            if (entries.put(source to colors, blocks) == null) chars += source.length
+            val iterator = entries.entries.iterator()
+            while (chars > MAX_CHARS && iterator.hasNext()) {
+                chars -= iterator.next().key.first.length
+                iterator.remove()
             }
         }
-        return blocks
     }
 }
 

@@ -21,6 +21,7 @@ import ai.opencode.mobile.data.remote.VcsInfo
 import android.util.Log
 import androidx.annotation.StringRes
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -41,8 +42,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -53,7 +58,12 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class AppRepository(private val settingsStore: SettingsSource) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // A bug in one background task (a reducer, a load) must not take the whole
+    // app down: it is logged, and the SupervisorJob keeps the others running.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, error -> Log.e(TAG, "background task failed", error) },
+    )
 
     @Volatile
     private var serverVersion: String? = null
@@ -75,6 +85,13 @@ class AppRepository(private val settingsStore: SettingsSource) {
     private data class OpenProject(val baseUrl: String, val directory: String)
 
     private val activeProject = MutableStateFlow<OpenProject?>(null)
+
+    /**
+     * The server whose last project has been read from disk. Until then its
+     * client is not connected: it would first talk to the server's default
+     * instance, then reconnect — and reload everything — with the project.
+     */
+    private val projectRestoredFor = MutableStateFlow<String?>(null)
 
     private val clientFlow: StateFlow<OpenCodeClient?> = combine(settings, activeProject) { config, project ->
         if (config.isConfigured) {
@@ -123,6 +140,21 @@ class AppRepository(private val settingsStore: SettingsSource) {
     private val _sessionsLoaded = MutableStateFlow(false)
     val sessionsLoaded: StateFlow<Boolean> = _sessionsLoaded.asStateFlow()
 
+    /**
+     * Session events seen while a session list is loading, one record per load in
+     * flight. The list snapshot is older than these events and must not undo
+     * them; see [loadSessions].
+     */
+    private class SessionChanges {
+        val changed = ConcurrentHashMap<String, Session>()
+        val deleted: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    }
+
+    private val sessionLoads = CopyOnWriteArraySet<SessionChanges>()
+
+    /** Serialises writes of the last project, so the last open wins on disk too. */
+    private val lastProjectLock = Mutex()
+
     /** Bumped by every permission/question event; see [loadSnapshot]. */
     private val permissionsEpoch = AtomicLong()
     private val questionsEpoch = AtomicLong()
@@ -134,8 +166,9 @@ class AppRepository(private val settingsStore: SettingsSource) {
     val sessionError: StateFlow<UiText?> = _sessionError.asStateFlow()
 
     /** Transient error from a user action (files/VCS) that UI should surface. */
-    private val _actionError = MutableStateFlow<UiText?>(null)
-    val actionError: StateFlow<UiText?> = _actionError.asStateFlow()
+    val actionError: StateFlow<UiText?> by lazy {
+        actionErrorState.map { it?.message }.stateIn(scope, SharingStarted.Eagerly, null)
+    }
 
     /** MCP servers of the connected opencode; null until the first load. */
     private val _mcpServers = MutableStateFlow<List<McpServer>?>(null)
@@ -169,6 +202,7 @@ class AppRepository(private val settingsStore: SettingsSource) {
                 _questions.value.any { sessionTree.matches(it.sessionID, sessionId) }
         },
         onUnattributedError = { message -> _sessionError.value = message },
+        onSessionChanged = { session -> applySessionChange("session.updated", session) },
     )
 
     val chat: StateFlow<ChatState> = chatController.state
@@ -206,8 +240,12 @@ class AppRepository(private val settingsStore: SettingsSource) {
                     // Reopen the project last used on this server, before the UI
                     // shows (process death restores screens, not this state).
                     if (url != null && activeProject.value?.baseUrl != url) {
-                        settingsStore.lastProject(url).first()?.let { activeProject.value = OpenProject(url, it) }
+                        runCatching { settingsStore.lastProject(url).first() }
+                            .onFailure { Log.w(TAG, "reading the last project failed", it) }
+                            .getOrNull()
+                            ?.let { activeProject.value = OpenProject(url, it) }
                     }
+                    projectRestoredFor.value = url
                     // Avoid a flash of the connect screen before DataStore has loaded.
                     _settingsLoaded.value = true
                 }
@@ -216,8 +254,11 @@ class AppRepository(private val settingsStore: SettingsSource) {
         scope.launch {
             var boundUrl: String? = null
             var boundDirectory: String? = null
-            combine(clientFlow, retryTick, streamWanted) { client, _, wanted -> client to wanted }
-                .collectLatest { (client, wanted) ->
+            combine(clientFlow, retryTick, streamWanted, projectRestoredFor) { client, _, wanted, restoredFor ->
+                Triple(client, wanted, client == null || client.baseUrl == restoredFor)
+            }
+                .collectLatest { (client, wanted, restored) ->
+                    if (!restored) return@collectLatest
                     selection.bindServer(client?.baseUrl)
                     projectStore.bindServer(client?.baseUrl)
                     if (client?.baseUrl != boundUrl) {
@@ -229,10 +270,12 @@ class AppRepository(private val settingsStore: SettingsSource) {
                         boundDirectory = client?.directory
                         clearServerData()
                     } else if (client?.directory != boundDirectory) {
-                        // Another project of the same server: sessions, cards and
-                        // MCP servers belong to an instance, models do not.
+                        // Another project of the same server: sessions, cards, MCP
+                        // servers, agents and the configured models all belong to
+                        // an instance (projects have their own config and agents).
                         boundDirectory = client?.directory
                         clearProjectData()
+                        selection.onProjectChanged()
                     }
                     if (client == null) {
                         _connection.value = ConnectionState.Disconnected
@@ -267,6 +310,7 @@ class AppRepository(private val settingsStore: SettingsSource) {
 
     private fun clearServerData() {
         clearProjectData()
+        serverVersion = null
         selection.clearProviders()
     }
 
@@ -318,7 +362,15 @@ class AppRepository(private val settingsStore: SettingsSource) {
                             syncJob?.cancel()
                             syncJob = syncScope.launch { sync(client) }
                         }
-                        handleEvent(client, envelope)
+                        // A reducer bug must not tear the stream down: that turned
+                        // one bad event into a reconnect and a full reload.
+                        try {
+                            handleEvent(client, envelope)
+                        } catch (cancellation: CancellationException) {
+                            throw cancellation
+                        } catch (error: Exception) {
+                            Log.e(TAG, "failed to apply ${envelope.type}", error)
+                        }
                     }
                     staleWatch.cancel()
                 }
@@ -449,29 +501,37 @@ class AppRepository(private val settingsStore: SettingsSource) {
         projectStore.load(client) { isCurrent(client) }
     }
 
+    /**
+     * Replaces the session list with the server's. Events keep arriving while it
+     * loads, and the list was read before them: a session created meanwhile went
+     * missing, a deleted one came back and an old rollback state was applied to
+     * the open chat. Those events are recorded during the load and win.
+     */
     private suspend fun loadSessions(client: OpenCodeClient) {
-        catchingNonCancellation { client.listSessions() }
-            .onSuccess { list ->
-                if (!isCurrent(client)) return@onSuccess
-                sessionTree.reset(list)
-                // Subagent sessions belong to their parent chat, not to the list.
-                // Blank/duplicate ids would also break the keyed LazyColumn.
-                _sessions.value = list
-                    .filter { it.parentID == null && it.id.isNotBlank() }
-                    .distinctBy { it.id }
-                    .sortedByDescending { session -> session.time?.updated ?: 0 }
-                _sessionsLoaded.value = true
-                // The open chat's rollback state may have changed while the
-                // stream was down.
-                list.firstOrNull { it.id == chat.value.sessionId }?.let(chatController::onSessionUpdated)
-            }
-            .onFailure {
-                Log.w(TAG, "loadSessions failed", it)
-                if (!isCurrent(client)) return@onFailure
-                _sessionError.value = it.toUiText(R.string.error_load_sessions)
-                // Leave the loading state: the list is empty because it could not be read.
-                _sessionsLoaded.value = true
-            }
+        val changes = SessionChanges()
+        sessionLoads.add(changes)
+        try {
+            catchingNonCancellation { client.listSessions() }
+                .onSuccess { list ->
+                    if (!isCurrent(client)) return@onSuccess
+                    val all = mergeSessionSnapshot(list, changes.changed, changes.deleted)
+                    sessionTree.reset(all)
+                    _sessions.value = listedSessions(all)
+                    _sessionsLoaded.value = true
+                    // The open chat's rollback state may have changed while the
+                    // stream was down.
+                    all.firstOrNull { it.id == chat.value.sessionId }?.let(chatController::onSessionUpdated)
+                }
+                .onFailure {
+                    Log.w(TAG, "loadSessions failed", it)
+                    if (!isCurrent(client)) return@onFailure
+                    _sessionError.value = it.toUiText(R.string.error_load_sessions)
+                    // Leave the loading state: the list is empty because it could not be read.
+                    _sessionsLoaded.value = true
+                }
+        } finally {
+            sessionLoads.remove(changes)
+        }
     }
 
     /**
@@ -564,7 +624,7 @@ class AppRepository(private val settingsStore: SettingsSource) {
         val normalized = normalizeDirectory(directory)
         if (normalized.isEmpty()) return
         activeProject.value = OpenProject(baseUrl, normalized)
-        scope.launch { settingsStore.saveLastProject(baseUrl, normalized) }
+        saveLastProject(baseUrl) { normalized }
     }
 
     /** Adds a directory picked by hand to the project list and opens it. */
@@ -575,12 +635,51 @@ class AppRepository(private val settingsStore: SettingsSource) {
         openProject(normalized)
     }
 
+    /**
+     * Takes [directory] off the list. When it is the open project the app leaves
+     * it too, instead of streaming events of a project that is no longer shown.
+     */
     fun hideProject(directory: String) {
-        projectStore.hide(directory)
+        val normalized = normalizeDirectory(directory)
+        projectStore.hide(normalized)
         val baseUrl = settings.value.baseUrl.let(OpenCodeClient::normalizeBaseUrl)
+        activeProject.update { project -> project?.takeUnless { it.baseUrl == baseUrl && it.directory == normalized } }
+        saveLastProject(baseUrl) { last -> last?.takeUnless { normalizeDirectory(it) == normalized } }
+    }
+
+    /** Forgets the last project when it is [directory], e.g. once it turned out to be gone. */
+    fun forgetLastProject(directory: String) {
+        val baseUrl = settings.value.takeIf { it.isConfigured }?.baseUrl?.let(OpenCodeClient::normalizeBaseUrl) ?: return
+        val normalized = normalizeDirectory(directory)
+        saveLastProject(baseUrl) { last -> last?.takeUnless { normalizeDirectory(it) == normalized } }
+    }
+
+    /**
+     * Updates the last project of [baseUrl] in order: separate launches could
+     * land on disk in any order, and the next start reopened the wrong project.
+     */
+    private fun saveLastProject(baseUrl: String, change: (String?) -> String?) {
         scope.launch {
-            if (settingsStore.lastProject(baseUrl).first() == directory) settingsStore.saveLastProject(baseUrl, null)
+            lastProjectLock.withLock {
+                val current = settingsStore.lastProject(baseUrl).first()
+                val next = change(current)
+                if (next != current) settingsStore.saveLastProject(baseUrl, next)
+            }
         }
+    }
+
+    /**
+     * Whether [directory] still exists on the server: false only when the server
+     * says so (400, 404, 410), null when that cannot be told (offline, a server
+     * error, or credentials it refuses — that is no reason to forget a project).
+     */
+    suspend fun projectExists(directory: String): Boolean? {
+        val client = clientFlow.value ?: return null
+        val result = catchingNonCancellation { client.listFilesIn(directory, "") }
+        val error = result.exceptionOrNull() ?: return true
+        Log.w(TAG, "checking project $directory failed", error)
+        val code = (error as? OpenCodeException)?.code ?: return null
+        return if (code in GONE_CODES) false else null
     }
 
     fun clearProjectsError() = projectStore.clearError()
@@ -677,7 +776,9 @@ class AppRepository(private val settingsStore: SettingsSource) {
             try {
                 val client = clientFlow.value ?: return@async null
                 catchingNonCancellation { client.createSession(CreateSessionRequest(title = title)) }
-                    .onSuccess { loadSessions(client) }
+                    // Listed at once: reloading the whole list first held the
+                    // navigation to the new chat for as long as that took.
+                    .onSuccess { session -> if (isCurrent(client)) applySessionChange("session.created", session) }
                     .onFailure {
                         Log.w(TAG, "createSession failed", it)
                         _sessionError.value = it.toUiText(R.string.error_create_session)
@@ -738,6 +839,9 @@ class AppRepository(private val settingsStore: SettingsSource) {
 
     /** Brings a rolled back message back; completes with the new prompt, or null. */
     fun restoreMessage(messageId: String): Deferred<EditDraft?> = chatController.restore(messageId)
+
+    /** Whether restoring [messageId] puts the next rolled back message into the prompt. */
+    fun restoreFillsPrompt(messageId: String): Boolean = chat.value.restoreTarget(messageId) != null
 
     fun abort() = chatController.abort()
 
@@ -811,8 +915,11 @@ class AppRepository(private val settingsStore: SettingsSource) {
 
     // --- Files and VCS ---
 
-    // Each action clears the previous error first: a failure used to stay on
-    // screen above content that had loaded fine since.
+    // A success clears the error of a previous failure of the same action: such
+    // an error used to stay on screen above content that had loaded fine since.
+    // Only of the same action, though: the Files screen runs several at once,
+    // and the VCS loads wiped a listing error, which then looked like an empty
+    // folder.
 
     /** Null when the listing could not be read (the error is in [actionError]). */
     suspend fun listFiles(path: String): List<FileNode>? =
@@ -832,17 +939,22 @@ class AppRepository(private val settingsStore: SettingsSource) {
     suspend fun sessionDiff(sessionId: String): List<VcsFileDiff> =
         fileAction(R.string.error_session_diff) { it.sessionDiff(sessionId) } ?: emptyList()
 
+    /** Which action set [actionError]; see [fileAction]. */
+    private data class ActionError(@StringRes val action: Int, val message: UiText)
+
+    private val actionErrorState = MutableStateFlow<ActionError?>(null)
+
     fun clearActionError() {
-        _actionError.value = null
+        actionErrorState.value = null
     }
 
     private suspend fun <T> fileAction(@StringRes failure: Int, call: suspend (OpenCodeClient) -> T): T? {
-        _actionError.value = null
         val client = clientFlow.value ?: return null
         return catchingNonCancellation { call(client) }
+            .onSuccess { actionErrorState.update { current -> current?.takeUnless { it.action == failure } } }
             .onFailure {
                 Log.w(TAG, "file action failed", it)
-                _actionError.value = it.toUiText(failure)
+                actionErrorState.value = ActionError(failure, it.toUiText(failure))
             }
             .getOrNull()
     }
@@ -918,21 +1030,37 @@ class AppRepository(private val settingsStore: SettingsSource) {
 
     private fun handleSessionEvent(type: String, props: JsonObject) {
         val session = props.decodeSession("info") ?: return
+        applySessionChange(type, session)
+    }
+
+    /** Applies a created/updated/deleted session to the list, the tree and the open chat. */
+    private fun applySessionChange(type: String, session: Session) {
+        if (session.id.isBlank()) return
+        val deleted = type == "session.deleted"
+        // Recorded first: a list load that finishes in between then has it too.
+        sessionLoads.forEach { changes ->
+            if (deleted) {
+                changes.changed.remove(session.id)
+                changes.deleted.add(session.id)
+            } else {
+                changes.deleted.remove(session.id)
+                changes.changed[session.id] = session
+            }
+        }
         // Subagent sessions are created under a parent and must not show up as
         // entries in the session list; their parent link is still recorded so
         // their events can be attributed.
         val listed = session.parentID == null
         _sessions.update { current ->
             when {
-                type == "session.deleted" || !listed -> current.filterNot { it.id == session.id }
-                type == "session.created" -> (current.filterNot { it.id == session.id } + session)
-                    .sortedByDescending { it.time?.updated ?: 0 }
-                // Activity moves a session to the top, as on a fresh load.
-                else -> current.map { if (it.id == session.id) session else it }
+                deleted || !listed -> current.filterNot { it.id == session.id }
+                // An update of a session the list does not have yet (created
+                // while the stream was down) adds it, as a created one would.
+                else -> (current.filterNot { it.id == session.id } + session)
                     .sortedByDescending { it.time?.updated ?: 0 }
             }
         }
-        if (type == "session.deleted") sessionTree.remove(session.id) else sessionTree.record(session)
+        if (deleted) sessionTree.remove(session.id) else sessionTree.record(session)
         if (type == "session.updated") chatController.onSessionUpdated(session)
     }
 
@@ -947,8 +1075,30 @@ class AppRepository(private val settingsStore: SettingsSource) {
         const val MAX_RECONNECT_DELAY_MILLIS = 30_000L
         const val STREAM_CHECK_INTERVAL_MILLIS = 10_000L
         const val STREAM_STALE_MILLIS = 45_000L
+        val GONE_CODES = setOf(400, 404, 410)
     }
 }
+
+/**
+ * The server's session list with the changes events made while it loaded:
+ * [changed] sessions replace or join it, [deleted] ones go. Blank and duplicate
+ * ids are dropped (the list is a keyed LazyColumn).
+ */
+internal fun mergeSessionSnapshot(
+    snapshot: List<Session>,
+    changed: Map<String, Session> = emptyMap(),
+    deleted: Set<String> = emptySet(),
+): List<Session> {
+    val byId = LinkedHashMap<String, Session>()
+    snapshot.forEach { session -> if (session.id.isNotBlank()) byId.putIfAbsent(session.id, session) }
+    changed.values.forEach { session -> byId[session.id] = session }
+    deleted.forEach(byId::remove)
+    return byId.values.toList()
+}
+
+/** Root sessions, most recently active first; subagent sessions belong to their parent's chat. */
+internal fun listedSessions(all: List<Session>): List<Session> =
+    all.filter { it.parentID == null }.sortedByDescending { session -> session.time?.updated ?: 0 }
 
 /** Adds [id] to the set unless present; true when this call added it. */
 private fun markIn(set: MutableStateFlow<Set<String>>, id: String): Boolean {

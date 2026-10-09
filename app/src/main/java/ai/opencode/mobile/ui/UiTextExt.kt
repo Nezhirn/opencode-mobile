@@ -11,4 +11,5 @@ import androidx.compose.ui.res.stringResource
 fun UiText.asString(): String = when (this) {
     is UiText.Raw -> text
     is UiText.Res -> stringResource(id, *args.toTypedArray())
+    is UiText.Lines -> lines.map { it.asString() }.joinToString("\n")
 }

@@ -3,7 +3,9 @@ package ai.opencode.mobile.ui.chat
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.remote.Part
 import ai.opencode.mobile.data.remote.Todo
+import ai.opencode.mobile.ui.components.MAX_REVEAL_CHARS
 import ai.opencode.mobile.ui.components.TruncatedText
+import ai.opencode.mobile.ui.components.safePrefix
 import ai.opencode.mobile.ui.components.stripAnsi
 import ai.opencode.mobile.ui.markdown.MarkdownText
 import ai.opencode.mobile.ui.theme.LocalGnomeAccents
@@ -36,10 +38,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +52,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -118,7 +122,7 @@ internal fun AssistantPart(part: Part) {
 
 @Composable
 private fun ReasoningBlock(text: String, stateKey: Any) {
-    var expanded by rememberSaveable(stateKey) { mutableStateOf(false) }
+    var expanded by rememberExpanded("reasoning-$stateKey")
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
         shape = RoundedCornerShape(12.dp),
@@ -159,7 +163,7 @@ private fun ReasoningBlock(text: String, stateKey: Any) {
 
 @Composable
 private fun ToolCard(part: Part) {
-    var expanded by rememberSaveable(part.id) { mutableStateOf(false) }
+    var expanded by rememberExpanded("tool-${part.id}")
     val state = part.state
     val status = state?.status ?: "pending"
     val accents = LocalGnomeAccents.current
@@ -232,9 +236,21 @@ private fun ToolCard(part: Part) {
     }
 }
 
+/** Output beyond what a reveal can show ([MAX_REVEAL_CHARS]) is not worth stripping. */
+private const val ANSI_STRIP_LIMIT = MAX_REVEAL_CHARS * 2
+
 @Composable
 private fun MonoBlock(title: String, text: String, stateKey: Any? = Unit) {
-    val clean = remember(text) { text.stripAnsi() }
+    // Escape sequences are stripped off the main thread: the regex ran over the
+    // whole output, megabytes for a coloured build log, on every streamed update.
+    // Only what can ever be revealed is stripped; until the first result the raw
+    // text shows, after that the previous result.
+    val hasEscapes = remember(text) { text.indexOf('\u001B') >= 0 }
+    var stripped by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(text, hasEscapes) {
+        stripped = if (hasEscapes) withContext(Dispatchers.Default) { text.safePrefix(ANSI_STRIP_LIMIT).stripAnsi() } else null
+    }
+    val clean = if (hasEscapes) stripped ?: text else text
     Column(modifier = Modifier.padding(top = 4.dp)) {
         Text(title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Surface(

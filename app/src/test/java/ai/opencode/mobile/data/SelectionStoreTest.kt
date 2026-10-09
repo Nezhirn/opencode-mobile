@@ -245,4 +245,35 @@ class SelectionStoreTest {
         store.selectModel(PromptModel("openrouter", "plain"))
         assertNull(store.selectedVariant.value)
     }
+
+    @Test
+    fun anAgentMissingInOneProjectStaysStoredAndComesBackWithTheOther() {
+        val store = store()
+        store.selectAgent("reviewer")
+
+        // A project without its own "reviewer" agent.
+        store.applyAgents(listOf(Agent(name = "build")))
+        assertNull(store.selectedAgent.value)
+        assertEquals("reviewer", settings.selection.value.agent)
+
+        store.onProjectChanged()
+
+        assertEquals("reviewer", store.selectedAgent.value)
+        assertTrue("the previous project's agents are not offered", store.agents.value.isEmpty())
+        assertNull(store.notice.value)
+    }
+
+    @Test
+    fun aModelMissingInOneProjectIsNotForgottenOnceProjectsWereSwitched() = runBlocking {
+        val store = connectedStore()
+        store.selectModel(PromptModel("runware", "glm"))
+        store.onProjectChanged()
+
+        store.applyProviders(ProviderList(all = listOf(provider("openrouter", "x/a")), connected = listOf("openrouter")))
+
+        assertEquals("x/a", store.selectedModel.value?.modelID)
+        assertEquals("glm", settings.selection.value.modelId)
+        store.onProjectChanged()
+        assertEquals("glm", store.selectedModel.value?.modelID)
+    }
 }

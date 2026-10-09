@@ -100,7 +100,7 @@ fun SessionsScreen(
 
     val filtered = remember(sessions, search) {
         if (search.isBlank()) sessions
-        else sessions.filter { it.title.contains(search, ignoreCase = true) }
+        else sessions.filter { it.displayTitle.contains(search, ignoreCase = true) }
     }
 
     LaunchedEffect(Unit) {
@@ -308,7 +308,7 @@ private fun SessionRow(session: Session, deleting: Boolean, onClick: () -> Unit,
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = !deleting, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

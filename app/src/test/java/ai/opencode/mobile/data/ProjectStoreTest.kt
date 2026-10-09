@@ -129,6 +129,82 @@ class ProjectStoreTest {
         assertEquals("/", directoryName("/"))
     }
 
+    @Test
+    fun aHalfThatFailsKeepsWhatWasReadBefore() = runBlocking {
+        var projectsFail = false
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path.orEmpty().substringBefore('?')) {
+                "/project" -> if (projectsFail) {
+                    MockResponse().setResponseCode(500).setBody("""{"message":"down"}""")
+                } else {
+                    MockResponse().setBody("""[{"id":"abc","worktree":"/home/me/app","vcs":"git"}]""")
+                }
+                "/api/session" -> MockResponse().setBody("""{"data":[]}""")
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        try {
+            val store = ProjectStore(CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), FakeSettings())
+            store.bindServer(server.url("/").toString())
+            val client = OpenCodeClient(server.url("/").toString())
+            store.load(client) { true }
+            withTimeout(5_000) { store.projects.first { it.isNotEmpty() } }
+
+            projectsFail = true
+            store.load(client) { true }
+
+            assertEquals(listOf("/home/me/app"), store.projects.value.map { it.directory })
+            assertTrue("the failure is shown", store.error.value != null)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun anHtmlPageForTheApiRouteFallsBackToTheSessionList() = runBlocking {
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path.orEmpty().substringBefore('?')) {
+                "/project" -> MockResponse().setBody("""[{"id":"global","worktree":"/"}]""")
+                // The web client's catch-all page of an old server.
+                "/api/session" -> MockResponse().setBody("<!doctype html><html><body>opencode</body></html>")
+                "/session" -> MockResponse().setBody(
+                    """[{"id":"s1","projectID":"global","directory":"/home/me/bot","time":{"created":1,"updated":7}}]""",
+                )
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        try {
+            val store = ProjectStore(CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), FakeSettings())
+            store.bindServer(server.url("/").toString())
+
+            store.load(OpenCodeClient(server.url("/").toString())) { true }
+
+            val projects = withTimeout(5_000) { store.projects.first { it.isNotEmpty() } }
+            assertEquals(1, projects.single().sessionCount)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun quickEditsOfTheLocalListAreAllKept() = runBlocking {
+        val settings = FakeSettings()
+        val store = ProjectStore(CoroutineScope(SupervisorJob() + Dispatchers.Default), settings)
+        store.bindServer("http://a")
+
+        repeat(20) { store.add("/p$it") }
+        withTimeout(5_000) { settings.saved.first { it.size == 20 } }
+
+        store.hide("/p3")
+
+        withTimeout(5_000) { settings.hidden.first { it == setOf("/p3") } }
+        assertEquals(19, settings.saved.value.size)
+    }
+
     private class FakeSettings : SettingsSource {
         override val settings: Flow<ConnectionSettings> = MutableStateFlow(ConnectionSettings())
         override suspend fun save(settings: ConnectionSettings) = Unit
@@ -138,5 +214,18 @@ class ProjectStoreTest {
         override suspend fun saveEnabledModels(serverUrl: String, models: Set<String>?) = Unit
         override val modelVariants: Flow<Map<String, String>> = MutableStateFlow(emptyMap())
         override suspend fun saveModelVariant(modelKey: String, variant: String?) = Unit
+
+        val saved = MutableStateFlow<Set<String>>(emptySet())
+        val hidden = MutableStateFlow<Set<String>>(emptySet())
+        override fun savedProjects(serverUrl: String): Flow<Set<String>> = saved
+        override suspend fun saveSavedProjects(serverUrl: String, directories: Set<String>) {
+            // A slow disk makes lost updates between overlapping edits likely.
+            kotlinx.coroutines.yield()
+            saved.value = directories
+        }
+        override fun hiddenProjects(serverUrl: String): Flow<Set<String>> = hidden
+        override suspend fun saveHiddenProjects(serverUrl: String, directories: Set<String>) {
+            hidden.value = directories
+        }
     }
 }

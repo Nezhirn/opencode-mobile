@@ -14,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
@@ -274,8 +275,11 @@ class AppRepositoryEventsTest {
             ),
         )
 
-        delay(150)
-        assertEquals("hello", repository.chat.value.messages.single().parts.single().text)
+        // Deltas are flushed on a timer: wait for it rather than for a fixed
+        // time, which a loaded CI machine can overrun.
+        withTimeout(5_000) {
+            while (repository.chat.value.messages.single().parts.single().text != "hello") delay(10)
+        }
     }
 
     private fun userMessageUpdated(id: String, sessionId: String) = event(

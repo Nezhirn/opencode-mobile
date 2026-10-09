@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -49,6 +50,7 @@ internal fun RevertDock(
     reverting: Boolean,
     onRestore: (String) -> Unit,
     modifier: Modifier = Modifier,
+    listMaxHeight: Dp = 200.dp,
 ) {
     if (messages.isEmpty()) return
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -90,7 +92,7 @@ internal fun RevertDock(
             if (expanded) {
                 Column(
                     modifier = Modifier
-                        .heightIn(max = 200.dp)
+                        .heightIn(max = listMaxHeight)
                         .verticalScroll(rememberScrollState())
                         .padding(start = 12.dp, end = 4.dp, bottom = 4.dp),
                 ) {

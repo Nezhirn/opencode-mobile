@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
 
 /**
  * The start screen: the projects (working directories) of the server, like the
@@ -81,7 +82,7 @@ fun ProjectsScreen(
     }
 
     if (showPicker) {
-        val picker by viewModel.picker.collectAsStateWithLifecycle()
+        val picker by viewModel.picker.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
         DirectoryPickerSheet(
             state = picker,
             onOpen = viewModel::openPicker,

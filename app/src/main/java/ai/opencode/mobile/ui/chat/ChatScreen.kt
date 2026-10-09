@@ -3,6 +3,7 @@ package ai.opencode.mobile.ui.chat
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ChatMessageUi
 import ai.opencode.mobile.data.ChatState
+import ai.opencode.mobile.data.messageErrorText
 import ai.opencode.mobile.data.userText
 import ai.opencode.mobile.ui.asString
 import ai.opencode.mobile.ui.components.TruncatedText
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -52,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -75,6 +78,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
@@ -100,11 +104,15 @@ fun ChatScreen(
     val selectedVariant by viewModel.selectedVariant.collectAsStateWithLifecycle()
     val modelNotice by viewModel.modelNotice.collectAsStateWithLifecycle()
     val enabledModels by viewModel.enabledModels.collectAsStateWithLifecycle()
-    val draft by viewModel.draft.collectAsStateWithLifecycle()
+    // Collected on Main.immediate: the field's value then follows each keystroke
+    // in the same frame. Collected a frame late, the field could briefly get the
+    // previous value back and the cursor jumped or a character was lost.
+    val draft by viewModel.draft.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
     val mcpServers by viewModel.mcpServers.collectAsStateWithLifecycle()
     val attachments by viewModel.attachments.collectAsStateWithLifecycle()
     val thumbnails by viewModel.thumbnails.collectAsStateWithLifecycle()
     val attachError by viewModel.attachError.collectAsStateWithLifecycle()
+    val pendingAttachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
     val contextUsage by viewModel.contextUsage.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) { viewModel.open(sessionId) }
@@ -113,6 +121,13 @@ fun ChatScreen(
     var showMcp by rememberSaveable { mutableStateOf(false) }
     var showContext by rememberSaveable { mutableStateOf(false) }
     var showFilePicker by rememberSaveable { mutableStateOf(false) }
+    // A message about to be put into a prompt that already holds something.
+    var confirmEdit by rememberSaveable { mutableStateOf<String?>(null) }
+    var confirmRestore by rememberSaveable { mutableStateOf<String?>(null) }
+    val onEdit: (String) -> Unit = { id -> if (viewModel.promptHasContent()) confirmEdit = id else viewModel.edit(id) }
+    val onRestore: (String) -> Unit = { id ->
+        if (viewModel.promptHasContent() && viewModel.restoreFillsPrompt(id)) confirmRestore = id else viewModel.restore(id)
+    }
     val pickDeviceFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         viewModel.addDeviceFiles(uris)
     }
@@ -121,186 +136,221 @@ fun ChatScreen(
         viewModel.focusPrompt.collect { runCatching { promptFocus.requestFocus() } }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    // The subtitle names the model every prompt will actually be
-                    // sent with, and opens the picker, so the choice is never
-                    // something the user has to infer.
-                    Column(modifier = Modifier.clickable { showModelSheet = true }) {
-                        Text(
-                            text = chat.title.ifBlank { stringResource(R.string.chat_title) },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        val model = selectedModel
-                        val modelLabel = if (model == null) {
-                            stringResource(R.string.chat_no_model)
-                        } else {
-                            stringResource(R.string.chat_model_subtitle, model.providerID, model.modelID)
-                        }
-                        Text(
-                            text = listOfNotNull(modelLabel, selectedVariant?.let(::variantLabel), selectedAgent)
-                                .joinToString(" · "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (model == null) {
-                                MaterialTheme.colorScheme.error
+    CompositionLocalProvider(LocalExpandedItems provides viewModel.expandedItems) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        // The subtitle names the model every prompt will actually be
+                        // sent with, and opens the picker, so the choice is never
+                        // something the user has to infer.
+                        Column(modifier = Modifier.clickable { showModelSheet = true }) {
+                            Text(
+                                text = chat.title.ifBlank { stringResource(R.string.chat_title) },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val model = selectedModel
+                            val modelLabel = if (model == null) {
+                                stringResource(R.string.chat_no_model)
                             } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_back))
-                    }
-                },
-                actions = {
-                    ContextButton(usagePercent = contextUsage, onClick = { showContext = true })
-                    IconButton(onClick = { showModelSheet = true }) {
-                        Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.chat_model_and_agent))
-                    }
-                    McpButton(servers = mcpServers, onClick = { showMcp = true })
-                    IconButton(onClick = { onOpenFiles(sessionId) }) {
-                        Icon(Icons.Filled.Folder, contentDescription = stringResource(R.string.sessions_open_files))
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        // Measured inside imePadding, so the budget shrinks while the keyboard is
-        // open. A fixed 260dp panel left the message list a sliver there. The
-        // Scaffold padding already holds the navigation bar, which the IME inset
-        // covers too: consumed here, or the bar was counted twice above the
-        // keyboard.
-        BoxWithConstraints(
-            modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
-        ) {
-            val density = LocalDensity.current
-            // The input bar is measured after the panels and got whatever they
-            // left; the budget is what remains once it has its own height.
-            var inputBarHeight by remember { mutableStateOf(0.dp) }
-            val panelCount = (if (questions.isNotEmpty()) 1 else 0) + (if (permissions.isNotEmpty()) 1 else 0)
-            val panelBudget = (maxHeight - inputBarHeight).coerceAtLeast(0.dp)
-            val panelMaxHeight = minOf(panelBudget * PANEL_SCREEN_FRACTION, PANEL_MAX_HEIGHT) / panelCount.coerceAtLeast(1)
-            Column(modifier = Modifier.fillMaxSize()) {
-                if (chat.todos.isNotEmpty()) {
-                    TodoStrip(chat.todos)
-                }
-
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    MessageList(
-                        chat = chat,
-                        onEdit = viewModel::edit,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-
-                if (questions.isNotEmpty()) {
-                    QuestionPanel(
-                        questions = questions,
-                        replying = replying,
-                        maxHeight = panelMaxHeight,
-                        onReply = viewModel::replyQuestion,
-                        onReject = viewModel::rejectQuestion,
-                    )
-                }
-
-                if (permissions.isNotEmpty()) {
-                    PermissionPanel(
-                        permissions = permissions,
-                        replying = replying,
-                        maxHeight = panelMaxHeight,
-                        onReply = viewModel::replyPermission,
-                    )
-                }
-
-                modelNotice?.let { notice ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = notice.asString(),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = viewModel::clearModelNotice) {
-                            Text(stringResource(R.string.action_dismiss))
+                                stringResource(R.string.chat_model_subtitle, model.providerID, model.modelID)
+                            }
+                            Text(
+                                text = listOfNotNull(modelLabel, selectedVariant?.let(::variantLabel), selectedAgent)
+                                    .joinToString(" · "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (model == null) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
-                    }
-                }
-
-                chat.error?.let { error ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = error.asString(),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = viewModel::clearError) {
-                            Text(stringResource(R.string.action_dismiss))
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.chat_back))
                         }
-                    }
-                }
-
-                attachError?.let { error ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = error.asString(),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = viewModel::clearAttachError) {
-                            Text(stringResource(R.string.action_dismiss))
+                    },
+                    actions = {
+                        ContextButton(usagePercent = contextUsage, onClick = { showContext = true })
+                        IconButton(onClick = { showModelSheet = true }) {
+                            Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.chat_model_and_agent))
                         }
-                    }
-                }
-
-                RevertDock(
-                    messages = chat.revertedUserMessages,
-                    reverting = chat.reverting,
-                    onRestore = viewModel::restore,
+                        McpButton(servers = mcpServers, onClick = { showMcp = true })
+                        IconButton(onClick = { onOpenFiles(sessionId) }) {
+                            Icon(Icons.Filled.Folder, contentDescription = stringResource(R.string.sessions_open_files))
+                        }
+                    },
                 )
+            },
+        ) { padding ->
+            // Measured inside imePadding, so the budget shrinks while the keyboard is
+            // open. A fixed 260dp panel left the message list a sliver there. The
+            // Scaffold padding already holds the navigation bar, which the IME inset
+            // covers too: consumed here, or the bar was counted twice above the
+            // keyboard.
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
+            ) {
+                val density = LocalDensity.current
+                // The input bar is measured after the panels and got whatever they
+                // left; the budget is what remains once everything that is always
+                // shown has its height: the todo strip above the list, and below it
+                // the notices, the rollback dock and the input bar itself.
+                var todoHeight by remember { mutableStateOf(0.dp) }
+                var bottomHeight by remember { mutableStateOf(0.dp) }
+                var inputBarHeight by remember { mutableStateOf(0.dp) }
+                val panelCount = (if (questions.isNotEmpty()) 1 else 0) + (if (permissions.isNotEmpty()) 1 else 0)
+                val shownTodoHeight = if (chat.todos.isEmpty()) 0.dp else todoHeight
+                val panelBudget = (maxHeight - bottomHeight - shownTodoHeight).coerceAtLeast(0.dp)
+                val panelMaxHeight = minOf(panelBudget * PANEL_SCREEN_FRACTION, PANEL_MAX_HEIGHT) / panelCount.coerceAtLeast(1)
+                // The dock's list is bounded by what the input bar leaves, so that in
+                // landscape with the keyboard open it cannot squeeze the field away.
+                val dockListMaxHeight = ((maxHeight - inputBarHeight) * DOCK_SCREEN_FRACTION).coerceIn(0.dp, DOCK_MAX_HEIGHT)
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (chat.todos.isNotEmpty()) {
+                        Box(modifier = Modifier.onSizeChanged { size -> todoHeight = with(density) { size.height.toDp() } }) {
+                            TodoStrip(chat.todos)
+                        }
+                    }
 
-                InputBar(
-                    text = draft,
-                    onTextChange = viewModel::onDraftChange,
-                    busy = chat.busy,
-                    onSend = viewModel::send,
-                    onStop = viewModel::abort,
-                    variants = availableVariants,
-                    selectedVariant = selectedVariant,
-                    onSelectVariant = viewModel::selectVariant,
-                    attachments = attachments,
-                    thumbnails = thumbnails,
-                    onAttachFromDevice = { pickDeviceFiles.launch(DEVICE_PICKER_MIMES) },
-                    onAttachFromProject = { showFilePicker = true },
-                    onRemoveAttachment = viewModel::removeAttachment,
-                    focusRequester = promptFocus,
-                    modifier = Modifier.onSizeChanged { size -> inputBarHeight = with(density) { size.height.toDp() } },
-                )
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        MessageList(
+                            chat = chat,
+                            onEdit = onEdit,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+
+                    if (questions.isNotEmpty()) {
+                        QuestionPanel(
+                            questions = questions,
+                            replying = replying,
+                            maxHeight = panelMaxHeight,
+                            onReply = viewModel::replyQuestion,
+                            onReject = viewModel::rejectQuestion,
+                        )
+                    }
+
+                    if (permissions.isNotEmpty()) {
+                        PermissionPanel(
+                            permissions = permissions,
+                            replying = replying,
+                            maxHeight = panelMaxHeight,
+                            onReply = viewModel::replyPermission,
+                        )
+                    }
+
+                    Column(modifier = Modifier.onSizeChanged { size -> bottomHeight = with(density) { size.height.toDp() } }) {
+                        modelNotice?.let { notice ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = notice.asString(),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = viewModel::clearModelNotice) {
+                                    Text(stringResource(R.string.action_dismiss))
+                                }
+                            }
+                        }
+
+                        chat.error?.let { error ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = error.asString(),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = viewModel::clearError) {
+                                    Text(stringResource(R.string.action_dismiss))
+                                }
+                            }
+                        }
+
+                        attachError?.let { error ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = error.asString(),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = viewModel::clearAttachError) {
+                                    Text(stringResource(R.string.action_dismiss))
+                                }
+                            }
+                        }
+
+                        RevertDock(
+                            messages = chat.revertedUserMessages,
+                            reverting = chat.reverting,
+                            onRestore = onRestore,
+                            listMaxHeight = dockListMaxHeight,
+                        )
+
+                        InputBar(
+                            text = draft,
+                            onTextChange = viewModel::onDraftChange,
+                            busy = chat.busy,
+                            onSend = viewModel::send,
+                            onStop = viewModel::abort,
+                            variants = availableVariants,
+                            selectedVariant = selectedVariant,
+                            onSelectVariant = viewModel::selectVariant,
+                            attachments = attachments,
+                            thumbnails = thumbnails,
+                            onAttachFromDevice = { pickDeviceFiles.launch(DEVICE_PICKER_MIMES) },
+                            onAttachFromProject = { showFilePicker = true },
+                            onRemoveAttachment = viewModel::removeAttachment,
+                            pendingAttachments = pendingAttachments,
+                            focusRequester = promptFocus,
+                            modifier = Modifier.onSizeChanged { size -> inputBarHeight = with(density) { size.height.toDp() } },
+                        )
+                    }
+                }
             }
         }
+    }
+
+    confirmEdit?.let { messageId ->
+        ReplacePromptDialog(
+            onConfirm = {
+                confirmEdit = null
+                viewModel.edit(messageId)
+            },
+            onDismiss = { confirmEdit = null },
+        )
+    }
+    confirmRestore?.let { messageId ->
+        ReplacePromptDialog(
+            onConfirm = {
+                confirmRestore = null
+                viewModel.restore(messageId)
+            },
+            onDismiss = { confirmRestore = null },
+        )
     }
 
     if (showModelSheet) {
@@ -347,7 +397,7 @@ fun ChatScreen(
     }
 
     if (showFilePicker) {
-        val picker by viewModel.filePicker.collectAsStateWithLifecycle()
+        val picker by viewModel.filePicker.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
         ProjectFilePickerSheet(
             state = picker,
             onOpen = viewModel::openFilePicker,
@@ -377,6 +427,23 @@ fun ChatScreen(
         )
     }
 }
+
+@Composable
+private fun ReplacePromptDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.edit_replace_title)) },
+        text = { Text(stringResource(R.string.edit_replace_message)) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.edit_replace_confirm)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+/** Share of what the input bar leaves that the rollback dock's list may take. */
+private const val DOCK_SCREEN_FRACTION = 0.3f
+
+/** The dock's list on tall screens. */
+private val DOCK_MAX_HEIGHT = 200.dp
 
 /** Share of the chat area the permission/question panels may take together. */
 private const val PANEL_SCREEN_FRACTION = 0.4f
@@ -458,6 +525,9 @@ private fun MessageList(chat: ChatState, onEdit: (String) -> Unit, modifier: Mod
         return
     }
 
+    // Read once here: the item lambda captured the whole chat state and was
+    // recreated on every streamed token.
+    val editEnabled = !chat.reverting
     LazyColumn(
         state = listState,
         modifier = modifier,
@@ -465,7 +535,7 @@ private fun MessageList(chat: ChatState, onEdit: (String) -> Unit, modifier: Mod
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(messages, key = { it.info.id }, contentType = { it.info.role }) { message ->
-            MessageItem(message, editEnabled = !chat.reverting, onEdit = onEdit)
+            MessageItem(message, editEnabled = editEnabled, onEdit = onEdit)
         }
     }
 }
@@ -515,9 +585,9 @@ private fun MessageItem(message: ChatMessageUi, editEnabled: Boolean, onEdit: (S
                 key(part.id) { AssistantPart(part) }
             }
             message.info.error?.let { error ->
-                val errorText = remember(error) { error.toString() }
+                val errorText = remember(error) { messageErrorText(error) }
                 Text(
-                    text = errorText,
+                    text = errorText.asString(),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -535,7 +605,7 @@ private fun UserMessage(message: ChatMessageUi, editEnabled: Boolean, onEdit: (S
     val (texts, files) = remember(message.parts) {
         message.parts.filter { it.type == "text" && it.synthetic != true } to message.parts.filter { it.type == "file" }
     }
-    var showActions by rememberSaveable(message.info.id) { mutableStateOf(false) }
+    var showActions by rememberExpanded("actions-${message.info.id}")
     val actionsAvailable = !message.isLocalEcho
     Column(
         modifier = Modifier.fillMaxWidth(),

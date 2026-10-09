@@ -11,6 +11,7 @@ import androidx.annotation.StringRes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -39,13 +40,28 @@ internal class ChatController(
     private val awaitingUserInput: (String) -> Boolean,
     /** Receives `session.error` messages that cannot be attributed to any chat. */
     private val onUnattributedError: (UiText) -> Unit,
+    /** Receives the session as the server answered a rollback with, for the session list. */
+    private val onSessionChanged: (Session) -> Unit = {},
 ) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     private val currentSessionId: String? get() = _state.value.sessionId
 
+    /** The load in flight, if any; guarded by [loadLock]. */
     private var loadJob: Job? = null
+    private val loadLock = Any()
+
+    /** A resync asked for while a load was in flight; it runs once that load is done. */
+    private var resyncPending = false
+
+    /**
+     * What events changed while the message snapshot loads. The snapshot was
+     * taken before them, so for these messages and parts the live state is
+     * newer and must win over it; see [withMessagesIfCurrent].
+     */
+    @Volatile
+    private var loadChanges: LiveChanges? = null
 
     /**
      * The screen that opened the chat last. Leaving a chat and reopening it
@@ -89,19 +105,21 @@ internal class ChatController(
         val current = _state.value
         if (!force && current.sessionId == sessionId && !current.loading) return
         val client = clientProvider() ?: return
-        // Cancel any in-flight load so a slower previous session cannot land in
-        // the newly opened chat.
-        loadJob?.cancel()
         clearDeltas()
         val session = sessionById(sessionId)
-        _state.value = ChatState(
-            sessionId = sessionId,
-            title = session?.title.orEmpty(),
-            loading = true,
-            revert = session?.revert?.takeIf { it.messageID.isNotBlank() },
-        )
+        synchronized(loadLock) {
+            // Cancel any in-flight load so a slower previous session cannot land
+            // in the newly opened chat.
+            cancelLoad()
+            _state.value = ChatState(
+                sessionId = sessionId,
+                title = session?.title.orEmpty(),
+                loading = true,
+                revert = session?.revert?.takeIf { it.messageID.isNotBlank() },
+            )
+            launchLoad(client, sessionId)
+        }
         session?.model?.let(selection::adoptSessionModel)
-        loadJob = scope.launch { load(client, sessionId) }
     }
 
     /**
@@ -113,7 +131,7 @@ internal class ChatController(
         if (sessionId != null && currentSessionId != sessionId) return
         if (owner != null && owner !== this.owner) return
         this.owner = null
-        loadJob?.cancel()
+        synchronized(loadLock) { cancelLoad() }
         clearDeltas()
         _state.value = ChatState()
     }
@@ -126,7 +144,7 @@ internal class ChatController(
             if (closed) ChatState() else state
         }
         if (closed) {
-            loadJob?.cancel()
+            synchronized(loadLock) { cancelLoad() }
             clearDeltas()
         }
     }
@@ -139,8 +157,49 @@ internal class ChatController(
     fun resync() {
         val sessionId = currentSessionId ?: return
         val client = clientProvider() ?: return
-        if (loadJob?.isActive == true) return
-        loadJob = scope.launch { load(client, sessionId) }
+        synchronized(loadLock) {
+            // A load already in flight may have read the history before the
+            // stream reopened, missing what happened in the gap: run another
+            // one after it instead of dropping this request.
+            if (loadJob != null) {
+                resyncPending = true
+                return
+            }
+            launchLoad(client, sessionId)
+        }
+    }
+
+    /** Called under [loadLock]. */
+    private fun cancelLoad() {
+        loadJob?.cancel()
+        loadJob = null
+        resyncPending = false
+        loadChanges = null
+    }
+
+    /** Starts loading [sessionId], then again for every resync asked for meanwhile. Called under [loadLock]. */
+    private fun launchLoad(client: OpenCodeClient, sessionId: String) {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val self = coroutineContext[Job]
+            try {
+                var current: OpenCodeClient = client
+                while (true) {
+                    load(current, sessionId)
+                    val again = synchronized(loadLock) {
+                        val again = resyncPending && currentSessionId == sessionId
+                        resyncPending = false
+                        if (!again && loadJob === self) loadJob = null
+                        again
+                    }
+                    if (!again) break
+                    current = clientProvider() ?: break
+                }
+            } finally {
+                synchronized(loadLock) { if (loadJob === self) loadJob = null }
+            }
+        }
+        loadJob = job
+        job.start()
     }
 
     private suspend fun load(client: OpenCodeClient, sessionId: String) {
@@ -150,6 +209,8 @@ internal class ChatController(
         val knownBefore = _state.value.takeIf { it.sessionId == sessionId }
             ?.messages?.mapTo(HashSet()) { it.info.id }
             .orEmpty()
+        val changes = LiveChanges()
+        loadChanges = changes
         catchingNonCancellation { client.getMessages(sessionId) }
             .onSuccess { messages ->
                 // Duplicate or blank ids would crash the LazyColumn that keys on
@@ -162,13 +223,14 @@ internal class ChatController(
                 // first keeps them from being appended to the fresh snapshot.
                 synchronized(deltaLock) {
                     flushDeltas()
-                    _state.update { state -> state.withMessagesIfCurrent(sessionId, ui, knownBefore) }
+                    _state.update { state -> state.withMessagesIfCurrent(sessionId, ui, knownBefore, changes) }
                 }
             }
             .onFailure { error ->
                 Log.w(TAG, "load($sessionId) messages failed", error)
                 _state.update { state -> state.withLoadErrorIfCurrent(sessionId, error.toUiText(R.string.error_load_messages)) }
             }
+        if (loadChanges === changes) loadChanges = null
         catchingNonCancellation { client.todos(sessionId) }
             .onSuccess { todos -> _state.update { state -> state.withTodosIfCurrent(sessionId, todos) } }
             .onFailure { Log.w(TAG, "load($sessionId) todos failed", it) }
@@ -210,8 +272,13 @@ internal class ChatController(
             statusEpoch.incrementAndGet()
             // A prompt sent while rolled back replaces what was rolled back: the
             // server deletes it before running the prompt.
-            val wasReverted = _state.value.revert != null
+            var previousRevert: SessionRevert? = null
+            var before: List<ChatMessageUi> = emptyList()
+            var hidden: Set<String> = emptySet()
             _state.updateIfCurrent(sessionId) { state ->
+                previousRevert = state.revert
+                before = state.messages
+                hidden = state.revertedMessageIds()
                 val committed = state.committedRevert()
                 committed.copy(
                     busy = true,
@@ -219,6 +286,9 @@ internal class ChatController(
                     messages = committed.messages + localUserMessage(localId, trimmed, attachments),
                 )
             }
+            val wasReverted = previousRevert != null
+            // A snapshot loading now still has them; they are gone all the same.
+            loadChanges?.removedMessages?.addAll(hidden)
             armBusyWatchdog()
             val request = PromptRequest(
                 model = ready.model,
@@ -232,15 +302,23 @@ internal class ChatController(
             catchingNonCancellation { client.promptAsync(sessionId, request) }
                 .onFailure { error ->
                     Log.w(TAG, "sendPrompt($sessionId) failed", error)
+                    loadChanges?.removedMessages?.removeAll(hidden)
                     _state.updateIfCurrent(sessionId) { state ->
-                        state.withoutMessage(localId).copy(
+                        val failed = state.withoutMessage(localId).copy(
                             busy = false,
                             error = error.toUiText(R.string.error_send_prompt),
                         )
+                        // Most likely the server never got as far as dropping the
+                        // rolled back messages: show them as rolled back again
+                        // rather than as live ones the next prompt would delete.
+                        if (wasReverted && failed.revert == null) failed.withRestoredRevert(previousRevert, before) else failed
                     }
-                    // Whether the server dropped the rolled back messages before
-                    // failing is unknown: read back what it has.
-                    if (wasReverted && currentSessionId == sessionId) resync()
+                    // Whether the server did drop them before failing is unknown:
+                    // read back what it has.
+                    if (wasReverted && currentSessionId == sessionId) {
+                        resync()
+                        refreshRevert(client, sessionId)
+                    }
                 }
                 .isSuccess
         }
@@ -274,9 +352,30 @@ internal class ChatController(
         _state.update { state -> state.copy(error = null) }
     }
 
+    /**
+     * The session as listed or announced. While a rollback is on its way the
+     * revert in such a copy predates it and is ignored: the rollback's own answer
+     * settles it.
+     */
     fun onSessionUpdated(session: Session) {
         _state.updateIfCurrent(session.id) { state ->
-            state.copy(title = session.title, revert = session.revert?.takeIf { it.messageID.isNotBlank() })
+            if (state.reverting) {
+                state.copy(title = session.title)
+            } else {
+                state.copy(title = session.title, revert = session.revert?.takeIf { it.messageID.isNotBlank() })
+            }
+        }
+    }
+
+    /** Reads the session's rollback state back from the server. */
+    private fun refreshRevert(client: OpenCodeClient, sessionId: String) {
+        scope.launch {
+            catchingNonCancellation { client.getSession(sessionId) }
+                .onSuccess { session ->
+                    onSessionUpdated(session)
+                    onSessionChanged(session)
+                }
+                .onFailure { Log.w(TAG, "getSession($sessionId) failed", it) }
         }
     }
 
@@ -351,10 +450,15 @@ internal class ChatController(
         _state.updateIfCurrent(sessionId) { state -> state.copy(revert = optimistic, reverting = true, error = null) }
         return scope.async {
             if (wasBusy) {
+                // Stop stays available unless the run really was stopped: a
+                // failed abort leaves it running, and the rollback is then
+                // refused as well.
                 catchingNonCancellation { client.abort(sessionId) }
+                    .onSuccess {
+                        statusEpoch.incrementAndGet()
+                        _state.updateIfCurrent(sessionId) { state -> state.copy(busy = false) }
+                    }
                     .onFailure { Log.w(TAG, "abort before revert failed", it) }
-                statusEpoch.incrementAndGet()
-                _state.updateIfCurrent(sessionId) { state -> state.copy(busy = false) }
             }
             var result = catchingNonCancellation { request() }
             if (result.isFailure && wasBusy) {
@@ -367,6 +471,7 @@ internal class ChatController(
                     _state.updateIfCurrent(sessionId) { state ->
                         state.copy(revert = session.revert?.takeIf { it.messageID.isNotBlank() }, reverting = false)
                     }
+                    onSessionChanged(session)
                 }
                 .onFailure { error ->
                     Log.w(TAG, "changing the rollback of $sessionId failed", error)
@@ -401,6 +506,7 @@ internal class ChatController(
                 // another client) injected empty ghost bubbles here.
                 if (info.sessionID.isNotBlank() && info.sessionID != target) return
                 noteActivity()
+                loadChanges?.messages?.add(info.id)
                 _state.updateIfCurrent(target) { state -> state.applyMessageUpdate(info) }
             }
 
@@ -408,6 +514,7 @@ internal class ChatController(
                 val messageId = props.stringOrNull("messageID") ?: return
                 val target = targetOf(props) ?: return
                 noteActivity()
+                loadChanges?.removedMessages?.add(messageId)
                 _state.updateIfCurrent(target) { state -> state.withoutMessage(messageId) }
             }
 
@@ -426,6 +533,7 @@ internal class ChatController(
                 // deltas again on top of this full text.
                 synchronized(deltaLock) {
                     flushDeltas()
+                    loadChanges?.parts?.add(part.id)
                     _state.updateIfCurrent(target) { state -> state.upsertPart(part, createMissingMessage = ownSession) }
                 }
             }
@@ -434,6 +542,7 @@ internal class ChatController(
                 val partId = props.stringOrNull("partID") ?: return
                 val target = targetOf(props) ?: return
                 noteActivity()
+                loadChanges?.removedParts?.add(partId)
                 _state.updateIfCurrent(target) { state -> state.withoutPart(partId) }
             }
 

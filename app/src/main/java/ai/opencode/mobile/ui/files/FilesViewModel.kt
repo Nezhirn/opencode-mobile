@@ -39,15 +39,23 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
     private val _openedFile = MutableStateFlow<FileContent?>(null)
     val openedFile = _openedFile.asStateFlow()
 
-    private val _loading = MutableStateFlow(false)
+    /** True while the session's changes load, and until they first have. */
+    private val _loading = MutableStateFlow(true)
     val loading = _loading.asStateFlow()
+
+    /** Path of the file being opened; the viewer shows once it is read. */
+    private val _openingFile = MutableStateFlow<String?>(null)
+    val openingFile = _openingFile.asStateFlow()
 
     /** True while a directory listing is on its way. */
     private val _browsing = MutableStateFlow(false)
     val browsing = _browsing.asStateFlow()
 
-    /** True while the VCS tab is loading. */
-    private val _vcsLoading = MutableStateFlow(false)
+    /**
+     * True while the VCS tab is loading, and until it first has: before that the
+     * empty status would read as a clean working tree.
+     */
+    private val _vcsLoading = MutableStateFlow(true)
     val vcsLoading = _vcsLoading.asStateFlow()
 
     val actionError = repository.actionError
@@ -56,6 +64,8 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
 
     private var sessionId: String? = null
     private var initialized = false
+    private var vcsRequested = false
+    private var sessionDiffRequested = false
 
     // One job per concern. Without them a slow request could land after a newer
     // one (stale file list for the wrong directory) or a repeated tap could run
@@ -66,17 +76,34 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
     private var openFileJob: Job? = null
 
     /**
-     * Loads the screen once per ViewModel. Without a session there is no diff
-     * to show, but the VCS tab still needs loading (it used to claim a clean
-     * tree), and an activity recreation must not reset the browsed directory.
+     * Sets the screen up once per ViewModel; an activity recreation must not
+     * reset the browsed directory. The diffs are loaded when their tab is first
+     * shown ([onTabShown]): every patch of the working tree was downloaded and
+     * kept in memory even by someone who only came to browse files.
      */
     fun load(sessionId: String?) {
         if (initialized && this.sessionId == sessionId) return
         initialized = true
         this.sessionId = sessionId
-        refreshSessionDiff()
-        loadVcs()
+        vcsRequested = false
+        sessionDiffRequested = false
         openDirectory("")
+    }
+
+    /** Loads what [tab] shows the first time it is shown (0 changes, 1 files, 2 VCS). */
+    fun onTabShown(tab: Int) {
+        // A file still being opened belongs to the tab that was left.
+        cancelOpenFile()
+        when (tab) {
+            0 -> if (!sessionDiffRequested) {
+                sessionDiffRequested = true
+                refreshSessionDiff()
+            }
+            2 -> if (!vcsRequested) {
+                vcsRequested = true
+                loadVcs()
+            }
+        }
     }
 
     fun loadVcs() {
@@ -108,6 +135,7 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
 
     /** Latest tap wins: an older listing must never repaint a directory the user left. */
     fun openDirectory(path: String) {
+        cancelOpenFile()
         browseJob?.cancel()
         browseJob = viewModelScope.launch {
             _browsing.value = true
@@ -123,13 +151,30 @@ class FilesViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
+    /** A repeated tap on the file being opened is ignored: it used to restart the download. */
     fun openFile(path: String) {
+        if (_openingFile.value == path && openFileJob?.isActive == true) return
         openFileJob?.cancel()
-        openFileJob = viewModelScope.launch { _openedFile.value = repository.readFile(path) }
+        _openingFile.value = path
+        openFileJob = viewModelScope.launch {
+            try {
+                _openedFile.value = repository.readFile(path)
+            } finally {
+                if (_openingFile.value == path) _openingFile.value = null
+            }
+        }
     }
 
     fun closeFile() {
+        cancelOpenFile()
         _openedFile.value = null
+    }
+
+    /** Drops a file still being opened, so its viewer does not pop up later over another view. */
+    private fun cancelOpenFile() {
+        openFileJob?.cancel()
+        openFileJob = null
+        _openingFile.value = null
     }
 
     companion object {

@@ -246,4 +246,12 @@
     <string name="revert_collapse">Скрыть возвращённые сообщения</string>
     <string name="error_revert">Не удалось откатить сессию</string>
     <string name="error_unrevert">Не удалось восстановить сообщения</string>
+    <string name="error_server_url_invalid">Введите адрес сервера, например http://192.168.1.10:4096</string>
+    <string name="error_response_too_large">Ответ сервера больше %1$d МБ</string>
+    <string name="error_attachments_total">Вложения одного сообщения не должны превышать %1$d МБ вместе</string>
+    <string name="error_attachment_empty">Файл %1$s пуст</string>
+    <string name="attach_reading">Чтение файлов…</string>
+    <string name="edit_replace_title">Заменить текст в поле ввода?</string>
+    <string name="edit_replace_message">Набранный текст и прикреплённые файлы будут заменены редактируемым сообщением.</string>
+    <string name="edit_replace_confirm">Заменить</string>
 </resources>

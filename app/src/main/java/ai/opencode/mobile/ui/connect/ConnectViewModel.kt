@@ -4,7 +4,9 @@ import ai.opencode.mobile.R
 import ai.opencode.mobile.data.AppRepository
 import ai.opencode.mobile.data.UiText
 import ai.opencode.mobile.data.local.ConnectionSettings
+import ai.opencode.mobile.data.remote.OpenCodeClient
 import ai.opencode.mobile.data.toUiText
+import ai.opencode.mobile.data.uiText
 import ai.opencode.mobile.ui.repository
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** What is typed into the connection form. */
 data class ConnectForm(
@@ -60,6 +63,12 @@ class ConnectViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun save() {
         val (baseUrl, username, password, allowInsecureTls) = _form.value
+        // Caught here with a clear message instead of as an obscure connection
+        // error later (spaces in the host, a stray scheme, an empty field).
+        if (OpenCodeClient.normalizeBaseUrl(baseUrl).toHttpUrlOrNull()?.host.isNullOrBlank()) {
+            _saveError.value = uiText(R.string.error_server_url_invalid)
+            return
+        }
         viewModelScope.launch {
             _saveError.value = null
             runCatching {

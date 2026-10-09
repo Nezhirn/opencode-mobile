@@ -9,11 +9,18 @@ import java.util.concurrent.ConcurrentHashMap
  * collector and the session loader, read from the UI, hence concurrent.
  */
 internal class SessionTree {
-    private val parentById = ConcurrentHashMap<String, String>()
+    @Volatile
+    private var parentById = ConcurrentHashMap<String, String>()
 
+    /**
+     * Replaces the whole tree in one step. Clearing and refilling in place left a
+     * moment without any links, and a subagent's event arriving then was not
+     * attributed to its chat.
+     */
     fun reset(sessions: List<Session>) {
-        parentById.clear()
-        sessions.forEach(::record)
+        val fresh = ConcurrentHashMap<String, String>()
+        sessions.forEach { session -> session.parentID?.let { fresh[session.id] = it } }
+        parentById = fresh
     }
 
     fun record(session: Session) {

@@ -8,6 +8,7 @@ import ai.opencode.mobile.data.remote.Todo
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import java.util.concurrent.ConcurrentHashMap
 
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState
@@ -91,6 +92,42 @@ internal fun ChatState.restoreTarget(messageId: String): ChatMessageUi? {
  */
 internal fun ChatState.committedRevert(): ChatState =
     if (revert == null) this else copy(messages = visibleMessages, revert = null)
+
+/**
+ * Undoes [committedRevert] after the prompt that committed it failed: the
+ * messages it dropped ([before] is the list it started from) come back behind
+ * the rollback point [revert], the message at the point with all its parts.
+ */
+internal fun ChatState.withRestoredRevert(revert: SessionRevert?, before: List<ChatMessageUi>): ChatState {
+    if (revert == null) return this
+    val currentById = messages.associateBy { it.info.id }
+    val beforeIds = before.mapTo(HashSet()) { it.info.id }
+    val restored = before.map { original ->
+        currentById[original.info.id]?.takeUnless { it.info.id == revert.messageID } ?: original
+    }
+    return copy(messages = restored + messages.filter { it.info.id !in beforeIds }, revert = revert)
+}
+
+/** Ids of the messages [committedRevert] drops. */
+internal fun ChatState.revertedMessageIds(): Set<String> {
+    if (revert == null) return emptySet()
+    val visible = visibleMessages.mapTo(HashSet()) { it.info.id }
+    return messages.mapNotNullTo(HashSet()) { message -> message.info.id.takeIf { it !in visible } }
+}
+
+/**
+ * Ids of messages and parts that events changed or removed while a snapshot of
+ * the chat was loading. Written by the event collector, read by the loader.
+ */
+internal class LiveChanges {
+    /** Messages whose `info` an event replaced. */
+    val messages: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Parts a full `message.part.updated` replaced. */
+    val parts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    val removedMessages: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    val removedParts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+}
 
 internal const val USER_ROLE = "user"
 internal const val TEXT_PART_TYPE = "text"
@@ -222,6 +259,9 @@ internal fun ChatState.withoutPart(partId: String): ChatState {
  *   confirmed; dropping them made the prompt vanish from the screen;
  * - a part whose live text is longer than the snapshot's keeps the live text,
  *   so tokens streamed after the snapshot was taken are not cut out;
+ * - messages and parts that [changes] lists keep their live version: a tool
+ *   that completed while the snapshot loaded stayed "running" for good, since
+ *   no later event repeats it; removed ones do not come back;
  * - an echo is kept only while the snapshot has no matching user message: when
  *   its `message.updated` was lost in a stream gap, keeping it showed the
  *   prompt twice, and every later prompt then consumed the wrong echo.
@@ -230,13 +270,19 @@ internal fun ChatState.withoutPart(partId: String): ChatState {
  */
 internal fun ChatState.withMessagesIfCurrent(
     sessionId: String,
-    messages: List<ChatMessageUi>,
+    snapshot: List<ChatMessageUi>,
     knownBefore: Set<String> = emptySet(),
+    changes: LiveChanges? = null,
 ): ChatState {
     if (this.sessionId != sessionId) return this
+    val messages = if (changes == null || changes.removedMessages.isEmpty()) {
+        snapshot
+    } else {
+        snapshot.filterNot { it.info.id in changes.removedMessages }
+    }
     val liveById = this.messages.associateBy { it.info.id }
     val snapshotIds = messages.mapTo(HashSet()) { it.info.id }
-    val merged = messages.map { snapshot -> liveById[snapshot.info.id]?.let { snapshot.mergedWith(it) } ?: snapshot }
+    val merged = messages.map { message -> liveById[message.info.id]?.let { message.mergedWith(it, changes) } ?: message }
     // User texts the server has that the live state does not know by id: each
     // can account for one echo.
     val unmatchedTexts = messages
@@ -249,20 +295,29 @@ internal fun ChatState.withMessagesIfCurrent(
             else -> message.info.id !in knownBefore
         }
     }
-    return copy(messages = merged + extras, loading = false, error = null)
+    // The error stays: a failed send or a session error must not vanish just
+    // because the chat was read back afterwards.
+    return copy(messages = merged + extras, loading = false)
 }
 
-/** The snapshot copy of a message, keeping live parts that are ahead of it. */
-private fun ChatMessageUi.mergedWith(live: ChatMessageUi): ChatMessageUi {
-    if (live.parts.isEmpty()) return this
+/** The snapshot copy of a message, keeping what is live and ahead of it. */
+private fun ChatMessageUi.mergedWith(live: ChatMessageUi, changes: LiveChanges?): ChatMessageUi {
+    val info = if (changes != null && info.id in changes.messages) live.info else info
+    if (live.parts.isEmpty()) return copy(info = info)
     val liveParts = live.parts.associateBy { it.id }
-    val parts = parts.map { part ->
+    val parts = parts.mapNotNull { part ->
+        if (changes != null && part.id in changes.removedParts) return@mapNotNull null
         val livePart = liveParts[part.id]
-        if (livePart != null && (livePart.text?.length ?: 0) > (part.text?.length ?: 0)) livePart else part
+        when {
+            livePart == null -> part
+            changes != null && part.id in changes.parts -> livePart
+            (livePart.text?.length ?: 0) > (part.text?.length ?: 0) -> livePart
+            else -> part
+        }
     }
     val known = parts.mapTo(HashSet()) { it.id }
     val newer = live.parts.filter { it.id !in known && !it.id.startsWith(LOCAL_ID_PREFIX) }
-    return if (newer.isEmpty()) copy(parts = parts) else copy(parts = parts + newer)
+    return copy(info = info, parts = if (newer.isEmpty()) parts else parts + newer)
 }
 
 internal fun ChatState.withLoadErrorIfCurrent(sessionId: String, message: UiText): ChatState =

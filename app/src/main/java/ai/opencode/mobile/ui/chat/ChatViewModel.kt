@@ -1,5 +1,6 @@
 package ai.opencode.mobile.ui.chat
 
+import ai.opencode.mobile.R
 import ai.opencode.mobile.data.AppRepository
 import ai.opencode.mobile.data.Attachment
 import ai.opencode.mobile.data.ContextStats
@@ -7,8 +8,10 @@ import ai.opencode.mobile.data.EditDraft
 import ai.opencode.mobile.data.UiText
 import ai.opencode.mobile.data.contextStats
 import ai.opencode.mobile.data.contextUsagePercent
+import ai.opencode.mobile.data.fileUrlOf
 import ai.opencode.mobile.data.remote.FileNode
 import ai.opencode.mobile.data.remote.PromptModel
+import ai.opencode.mobile.data.uiText
 import ai.opencode.mobile.ui.repository
 import android.content.ContentResolver
 import android.net.Uri
@@ -38,6 +41,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
 
@@ -114,6 +119,20 @@ class ChatViewModel(
 
     private val attachmentCounter = AtomicLong()
 
+    /** Expanded cards of the chat; memory only, see [ExpandedItems]. */
+    val expandedItems = ExpandedItems()
+
+    /**
+     * Files picked on the phone that are still being read. Sending waits for
+     * them: the prompt used to leave without the file, which then turned up in
+     * the field and went out with the next, unrelated prompt.
+     */
+    private val _pendingAttachments = MutableStateFlow(0)
+    val pendingAttachments: StateFlow<Int> = _pendingAttachments.asStateFlow()
+
+    /** One file is read at a time: two picks at once doubled the memory peak. */
+    private val readLock = Mutex()
+
     /** Asks the screen to focus the prompt field (after "edit"). */
     private val _focusPrompt = Channel<Unit>(Channel.CONFLATED)
     val focusPrompt: Flow<Unit> = _focusPrompt.receiveAsFlow()
@@ -173,6 +192,7 @@ class ChatViewModel(
      * user has started typing something else meanwhile.
      */
     fun send() {
+        if (_pendingAttachments.value > 0) return
         val text = draft.value
         val files = _attachments.value
         if (text.isBlank() && files.isEmpty()) return
@@ -180,12 +200,15 @@ class ChatViewModel(
         _attachments.value = emptyList()
         viewModelScope.launch {
             val accepted = repository.sendPrompt(text, files).await()
-            if (!accepted && draft.value.isEmpty() && _attachments.value.isEmpty()) {
-                setDraft(text)
-                _attachments.value = files
-            } else {
+            if (accepted) {
                 dropThumbnailsExcept(_attachments.value)
+                return@launch
             }
+            // Nothing the user wrote is lost: what was typed since goes after
+            // the prompt that came back, files picked since stay.
+            val typed = draft.value
+            setDraft(if (typed.isBlank()) text else text.trimEnd() + "\n\n" + typed)
+            _attachments.update { current -> files + current.filter { added -> files.none { it.url == added.url } } }
         }
     }
 
@@ -197,11 +220,28 @@ class ChatViewModel(
     fun addDeviceFiles(uris: List<Uri>) {
         if (uris.isEmpty()) return
         _attachError.value = null
+        _pendingAttachments.update { it + uris.size }
         viewModelScope.launch {
-            uris.forEach { uri ->
-                when (val result = readDeviceFile(contentResolver, uri, nextAttachmentId())) {
-                    is DeviceFileResult.Ok -> addAttachment(result.attachment, result.thumbnail)
-                    is DeviceFileResult.Failed -> _attachError.value = result.message
+            val failures = ArrayList<UiText>()
+            try {
+                readLock.withLock {
+                    uris.forEach { uri ->
+                        try {
+                            when (val result = readDeviceFile(contentResolver, uri, nextAttachmentId())) {
+                                is DeviceFileResult.Ok -> addAttachment(result.attachment, result.thumbnail)?.let(failures::add)
+                                is DeviceFileResult.Failed -> failures += result.message
+                            }
+                        } finally {
+                            _pendingAttachments.update { (it - 1).coerceAtLeast(0) }
+                        }
+                    }
+                }
+            } finally {
+                // Every file that failed is named, not just the last one.
+                _attachError.value = when (failures.size) {
+                    0 -> null
+                    1 -> failures.single()
+                    else -> UiText.Lines(failures)
                 }
             }
         }
@@ -212,23 +252,38 @@ class ChatViewModel(
         val root = repository.currentDirectory.value ?: return
         val path = relativePath.trimStart('/').trimEnd('/')
         if (path.isEmpty()) return
-        val absolute = if (root == "/") "/$path" else "$root/$path"
+        val separator = if (root.contains('\\') && !root.contains('/')) "\\" else "/"
+        val absolute = if (root == "/") "/$path" else root.trimEnd('/', '\\') + separator + path
         addAttachment(
             Attachment(
                 id = nextAttachmentId(),
                 filename = path,
                 mime = projectFileMime(path),
-                url = "file://$absolute",
+                url = fileUrlOf(absolute),
             ),
             thumbnail = null,
-        )
+        )?.let { _attachError.value = it }
     }
 
-    private fun addAttachment(attachment: Attachment, thumbnail: ImageBitmap?) {
-        // The same file twice is a mistake, not a request.
-        if (_attachments.value.any { it.url == attachment.url }) return
-        _attachments.update { it + attachment }
-        if (thumbnail != null) _thumbnails.update { it + (attachment.id to thumbnail) }
+    /** Adds [attachment] unless it is already there; the reason when it does not fit. */
+    private fun addAttachment(attachment: Attachment, thumbnail: ImageBitmap?): UiText? {
+        var refused: UiText? = null
+        _attachments.update { current ->
+            refused = null
+            when {
+                // The same file twice is a mistake, not a request.
+                current.any { it.url == attachment.url } -> current
+                current.sumOf { it.sizeBytes } + attachment.sizeBytes > MAX_TOTAL_ATTACHMENT_BYTES -> {
+                    refused = uiText(R.string.error_attachments_total, MAX_TOTAL_ATTACHMENTS_MB)
+                    current
+                }
+                else -> current + attachment
+            }
+        }
+        if (refused == null && thumbnail != null && _attachments.value.any { it.id == attachment.id }) {
+            _thumbnails.update { it + (attachment.id to thumbnail) }
+        }
+        return refused
     }
 
     fun removeAttachment(id: String) {
@@ -298,7 +353,17 @@ class ChatViewModel(
 
     // --- Edit and rollback ---
 
-    /** Rolls back to before [messageId] and puts the message into the prompt to edit. */
+    /** True when there is something in the prompt that putting a message into it would replace. */
+    fun promptHasContent(): Boolean = draft.value.isNotBlank() || _attachments.value.isNotEmpty()
+
+    /** Whether restoring [messageId] puts another message into the prompt (or just undoes the rollback). */
+    fun restoreFillsPrompt(messageId: String): Boolean = repository.restoreFillsPrompt(messageId)
+
+    /**
+     * Rolls back to before [messageId] and puts the message into the prompt to
+     * edit, replacing what is there: the screen asks first when that is
+     * something ([promptHasContent]).
+     */
     fun edit(messageId: String) {
         viewModelScope.launch {
             val draft = repository.revertTo(messageId).await() ?: return@launch
@@ -315,12 +380,18 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Puts [draft] into the prompt. An empty one (the whole rollback undone)
+     * leaves the prompt alone: it used to clear whatever was being typed.
+     */
     private suspend fun applyDraft(draft: EditDraft) {
-        setDraft(draft.text)
-        _attachments.value = draft.attachments
+        if (draft.text.isBlank() && draft.attachments.isEmpty()) return
+        // Previews first, so the files and their previews change together.
         val previews = withContext(Dispatchers.Default) {
             draft.attachments.mapNotNull { attachment -> thumbnailOf(attachment)?.let { attachment.id to it } }.toMap()
         }
+        setDraft(draft.text)
+        _attachments.value = draft.attachments
         _thumbnails.value = previews
     }
 

@@ -234,4 +234,12 @@
     <string name="revert_collapse">Hide rolled back messages</string>
     <string name="error_revert">Failed to roll back the session</string>
     <string name="error_unrevert">Failed to restore the messages</string>
+    <string name="error_server_url_invalid">Enter a server address such as http://192.168.1.10:4096</string>
+    <string name="error_response_too_large">The server\'s answer is larger than %1$d MB</string>
+    <string name="error_attachments_total">Attachments of one message may not exceed %1$d MB in total</string>
+    <string name="error_attachment_empty">%1$s is empty</string>
+    <string name="attach_reading">Reading files…</string>
+    <string name="edit_replace_title">Replace the prompt?</string>
+    <string name="edit_replace_message">The text and files in the prompt field will be replaced by the message you are editing.</string>
+    <string name="edit_replace_confirm">Replace</string>
 </resources>

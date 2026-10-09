@@ -1,6 +1,5 @@
 package ai.opencode.mobile.data.remote
 
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,11 +11,8 @@ import org.junit.Test
  */
 class PromptRequestSerializationTest {
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-        encodeDefaults = false
-    }
+    // The app's own configuration: a copy here could drift from it.
+    private val json = OpenCodeJson
 
     @Test
     fun textPartAlwaysSerializesItsType() {

@@ -39,6 +39,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -82,10 +83,12 @@ fun FilesScreen(
     val browsing by viewModel.browsing.collectAsStateWithLifecycle()
     val vcsLoading by viewModel.vcsLoading.collectAsStateWithLifecycle()
     val actionError by viewModel.actionError.collectAsStateWithLifecycle()
+    val openingFile by viewModel.openingFile.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) { viewModel.load(sessionId) }
 
     var tab by rememberSaveable { mutableIntStateOf(if (sessionId != null) 0 else 1) }
+    LaunchedEffect(sessionId, tab) { viewModel.onTabShown(tab) }
     // Session changes only exist with a session; without one the tab was always empty.
     val tabs = listOfNotNull(
         (0 to stringResource(R.string.files_tab_changes)).takeIf { sessionId != null },
@@ -127,6 +130,7 @@ fun FilesScreen(
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title) })
                 }
             }
+            if (openingFile != null) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             actionError?.let { message ->
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -382,7 +386,9 @@ private fun FileViewerDialog(file: FileContent, onClose: () -> Unit) {
                     }
                 }
                 HorizontalDivider()
-                val raw = if (file.type == "binary") stringResource(R.string.files_binary) else file.content
+                // Images and the like come base64-encoded: shown as text that is
+                // just a wall of characters (and up to 200 000 of them laid out).
+                val raw = if (file.type == "binary" || file.encoding == "base64") stringResource(R.string.files_binary) else file.content
                 val capped = remember(raw) { raw.safePrefix(MAX_FILE_CHARS) }
                 // A LazyColumn over bounded chunks, not one Text in a
                 // verticalScroll: the old version measured the whole file on the

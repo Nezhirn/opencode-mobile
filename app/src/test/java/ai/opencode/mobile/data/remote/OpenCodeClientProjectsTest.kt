@@ -106,6 +106,7 @@ class OpenCodeClientProjectsTest {
         val request = server.takeRequest()
         assertEquals("POST", request.method)
         assertEquals("/session/ses_1/unrevert", request.path)
+        assertEquals(0L, request.bodySize)
         assertEquals(null, session.revert)
     }
 

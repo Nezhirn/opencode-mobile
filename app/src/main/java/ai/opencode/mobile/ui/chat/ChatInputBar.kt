@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -85,6 +86,8 @@ internal fun InputBar(
     onAttachFromProject: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Picked files still being read; Send waits for them. */
+    pendingAttachments: Int = 0,
     focusRequester: FocusRequester = remember { FocusRequester() },
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier) {
@@ -92,13 +95,13 @@ internal fun InputBar(
             if (variants.isNotEmpty()) {
                 VariantChip(variants = variants, selected = selectedVariant, onSelect = onSelectVariant)
             }
-            if (attachments.isNotEmpty()) {
-                AttachmentRow(attachments, thumbnails, onRemoveAttachment)
+            if (attachments.isNotEmpty() || pendingAttachments > 0) {
+                AttachmentRow(attachments, thumbnails, pendingAttachments, onRemoveAttachment)
             }
             PromptRow(
                 text = text,
                 onTextChange = onTextChange,
-                canSend = text.isNotBlank() || attachments.isNotEmpty(),
+                canSend = pendingAttachments == 0 && (text.isNotBlank() || attachments.isNotEmpty()),
                 busy = busy,
                 onSend = onSend,
                 onStop = onStop,
@@ -114,6 +117,7 @@ internal fun InputBar(
 private fun AttachmentRow(
     attachments: List<Attachment>,
     thumbnails: Map<String, ImageBitmap>,
+    pending: Int,
     onRemove: (String) -> Unit,
 ) {
     Row(
@@ -162,6 +166,16 @@ private fun AttachmentRow(
                     },
                 )
             }
+        }
+        if (pending > 0) {
+            AssistChip(
+                onClick = {},
+                enabled = false,
+                label = { Text(stringResource(R.string.attach_reading)) },
+                leadingIcon = {
+                    CircularProgressIndicator(modifier = Modifier.size(AssistChipDefaults.IconSize), strokeWidth = 2.dp)
+                },
+            )
         }
     }
 }
