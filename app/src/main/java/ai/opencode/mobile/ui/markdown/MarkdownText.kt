@@ -3,6 +3,7 @@ package ai.opencode.mobile.ui.markdown
 import ai.opencode.mobile.ui.components.RevealableText
 import ai.opencode.mobile.ui.components.chunkForDisplay
 import ai.opencode.mobile.ui.components.chunkedForLayout
+import ai.opencode.mobile.ui.theme.LocalGnomeAccents
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -87,6 +88,7 @@ fun MarkdownText(
         val colors = MarkdownColors(
             link = MaterialTheme.colorScheme.primary,
             codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest,
+            emphasis = LocalGnomeAccents.current.emphasis,
         )
         val blocks = rememberMarkdownBlocks(shown, colors)
         val platformUriHandler = LocalUriHandler.current

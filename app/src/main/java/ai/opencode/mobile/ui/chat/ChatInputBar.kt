@@ -40,11 +40,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.InputChipDefaults
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -201,16 +203,19 @@ private fun PromptRow(
     onAttachFromProject: () -> Unit,
     focusRequester: FocusRequester,
 ) {
+    // The field takes the whole width; Attach sits above Send in a column on
+    // the right, so the text gets the room the left-hand button used to take.
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Bottom,
     ) {
-        AttachButton(onAttachFromDevice, onAttachFromProject)
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
             placeholder = { Text(stringResource(R.string.chat_input_hint)) },
             modifier = Modifier.weight(1f).heightIn(max = 160.dp).focusRequester(focusRequester),
+            // Two lines tall at rest: as tall as the button column beside it.
+            minLines = 2,
             maxLines = 6,
             // A chat message, not a code field: start sentences with a capital.
             keyboardOptions = KeyboardOptions(
@@ -218,24 +223,33 @@ private fun PromptRow(
                 autoCorrectEnabled = true,
             ),
         )
-        Spacer(Modifier.width(8.dp))
-        if (busy) {
-            IconButton(onClick = onStop) {
-                Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.chat_stop), tint = MaterialTheme.colorScheme.error)
-            }
-        } else {
-            IconButton(onClick = onSend, enabled = canSend) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_send))
+        Spacer(Modifier.width(4.dp))
+        // 40dp buttons (the visible size of an IconButton anyway) keep the
+        // column as tall as a two-line field instead of 96dp.
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides PROMPT_BUTTON_SIZE) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                AttachButton(onAttachFromDevice, onAttachFromProject)
+                if (busy) {
+                    IconButton(onClick = onStop, modifier = Modifier.size(PROMPT_BUTTON_SIZE)) {
+                        Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.chat_stop), tint = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    IconButton(onClick = onSend, enabled = canSend, modifier = Modifier.size(PROMPT_BUTTON_SIZE)) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_send))
+                    }
+                }
             }
         }
     }
 }
 
+private val PROMPT_BUTTON_SIZE = 40.dp
+
 @Composable
 private fun AttachButton(onFromDevice: () -> Unit, onFromProject: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.size(PROMPT_BUTTON_SIZE)) {
             Icon(Icons.Filled.AttachFile, contentDescription = stringResource(R.string.attach_file))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {

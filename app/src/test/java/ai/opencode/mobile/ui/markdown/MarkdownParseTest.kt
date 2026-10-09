@@ -10,7 +10,7 @@ import org.junit.Test
 
 class MarkdownParseTest {
 
-    private val colors = MarkdownColors(link = Color.Blue, codeBackground = Color.Gray)
+    private val colors = MarkdownColors(link = Color.Blue, codeBackground = Color.Gray, emphasis = Color.Cyan)
 
     private fun parse(source: String) = parseMarkdown(source, colors)
 
@@ -115,6 +115,14 @@ class MarkdownParseTest {
         // One line without breaks: cut hard into bounded pieces, nothing lost.
         assertEquals(source, blocks.joinToString("") { (it as MdBlock.Paragraph).text.text })
         assertTrue(blocks.size > 1)
+    }
+
+    @Test
+    fun asteriskEmphasisIsTintedButUnderscoreIsNot() {
+        val paragraph = parse("*waves* and _whispers_").single() as MdBlock.Paragraph
+
+        val tinted = paragraph.text.spanStyles.filter { it.item.color == Color.Cyan }
+        assertEquals(listOf("waves"), tinted.map { paragraph.text.text.substring(it.start, it.end) })
     }
 
     @Test

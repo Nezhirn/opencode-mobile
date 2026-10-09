@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
  * (window_bg_color, view_bg_color, headerbar_bg_color, accent_bg_color, ...).
  */
 private object Adwaita {
+    val Blue1 = Color(0xFF99C1F1)
     val Blue2 = Color(0xFF62A0EA)
     val Blue3 = Color(0xFF3584E4) // accent_bg_color
     val Blue4 = Color(0xFF1C71D8)
@@ -45,16 +46,18 @@ private object Adwaita {
 data class GnomeAccents(
     val success: Color,
     val warning: Color,
+    /** `*action*` text in chat replies, as roleplay sessions write it. */
+    val emphasis: Color,
 )
 
 val LocalGnomeAccents = staticCompositionLocalOf {
-    GnomeAccents(success = Adwaita.Green5, warning = Adwaita.Yellow5)
+    GnomeAccents(success = Adwaita.Green5, warning = Adwaita.Yellow5, emphasis = Adwaita.Blue3)
 }
 
 // Darkened against the light background: Adwaita's own #26A269 is ~3.1:1 on
 // white, and these accents carry 11sp labels.
-private val LightAccents = GnomeAccents(success = Color(0xFF1B7D51), warning = Color(0xFF9C6A00))
-private val DarkAccents = GnomeAccents(success = Adwaita.GreenBright, warning = Adwaita.Yellow2)
+private val LightAccents = GnomeAccents(success = Color(0xFF1B7D51), warning = Color(0xFF9C6A00), emphasis = Adwaita.Blue4)
+private val DarkAccents = GnomeAccents(success = Adwaita.GreenBright, warning = Adwaita.Yellow2, emphasis = Adwaita.Blue1)
 
 private val LightColors = lightColorScheme(
     // Accent is a *background* in Adwaita (white on blue), so primaryContainer

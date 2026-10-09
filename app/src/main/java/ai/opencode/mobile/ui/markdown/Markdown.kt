@@ -49,6 +49,8 @@ import org.commonmark.parser.Parser
 data class MarkdownColors(
     val link: Color,
     val codeBackground: Color,
+    /** Tint for `*asterisk*` emphasis: roleplay replies mark actions with it. */
+    val emphasis: Color,
 )
 
 /**
@@ -313,7 +315,11 @@ private class BlockCollector(
             is Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = colors.codeBackground)) {
                 append(node.literal)
             }
-            is Emphasis -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { appendInlines(node, depth) }
+            is Emphasis -> {
+                // `_underscore_` stays plain italic; only `*asterisks*` get the tint.
+                val tint = if (node.openingDelimiter == "*") colors.emphasis else Color.Unspecified
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = tint)) { appendInlines(node, depth) }
+            }
             is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { appendInlines(node, depth) }
             is Strikethrough -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { appendInlines(node, depth) }
             is Link -> appendLink(node.destination) { appendInlines(node, depth) }
