@@ -56,6 +56,9 @@
     <string name="chat_thinking">Размышления</string>
     <string name="chat_retrying">Повтор (попытка %1$d)…</string>
     <string name="chat_context_compacted">контекст сжат</string>
+    <string name="chat_compacting">сжатие контекста…</string>
+    <string name="chat_session_compacted">сессия сжата</string>
+    <string name="chat_compaction_unfinished">сжатие не завершено</string>
     <string name="chat_step">шаг</string>
     <string name="chat_subtask">Подзадача: %1$s</string>
     <string name="chat_agent">Агент: %1$s</string>
@@ -152,6 +155,8 @@
     <string name="error_load_sessions">Не удалось загрузить сессии</string>
     <string name="error_send_prompt">Не удалось отправить сообщение</string>
     <string name="error_abort">Не удалось остановить</string>
+    <string name="error_compact">Не удалось сжать сессию</string>
+    <string name="error_compact_empty">Пока нечего сжимать</string>
     <string name="error_run_stalled">Сервер не отвечает; возможно, выполнение зависло.</string>
     <string name="error_reply_permission">Не удалось ответить на запрос разрешения</string>
     <string name="error_reply_question">Не удалось ответить на вопрос</string>

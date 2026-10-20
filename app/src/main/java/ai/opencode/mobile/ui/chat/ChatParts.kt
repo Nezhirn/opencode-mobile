@@ -1,6 +1,7 @@
 package ai.opencode.mobile.ui.chat
 
 import ai.opencode.mobile.R
+import ai.opencode.mobile.data.CompactionState
 import ai.opencode.mobile.data.remote.Part
 import ai.opencode.mobile.data.remote.Todo
 import ai.opencode.mobile.ui.components.MAX_REVEAL_CHARS
@@ -272,6 +273,24 @@ private fun MonoBlock(title: String, text: String, stateKey: Any? = Unit) {
             }
         }
     }
+}
+
+/**
+ * Where the session was compacted, in place of the marker message the server
+ * adds (it has no text to show). The summary below it is what later prompts
+ * get instead of the history above.
+ */
+@Composable
+internal fun CompactionMarker(state: CompactionState) {
+    StepDivider(
+        label = stringResource(
+            when (state) {
+                CompactionState.Running -> R.string.chat_compacting
+                CompactionState.Done -> R.string.chat_session_compacted
+                CompactionState.Unfinished -> R.string.chat_compaction_unfinished
+            },
+        ),
+    )
 }
 
 @Composable

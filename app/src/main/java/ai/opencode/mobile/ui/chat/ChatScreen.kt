@@ -3,6 +3,7 @@ package ai.opencode.mobile.ui.chat
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ChatMessageUi
 import ai.opencode.mobile.data.ChatState
+import ai.opencode.mobile.data.compactionStates
 import ai.opencode.mobile.data.messageErrorText
 import ai.opencode.mobile.data.userText
 import ai.opencode.mobile.ui.asString
@@ -451,6 +452,9 @@ private const val PANEL_SCREEN_FRACTION = 0.4f
 /** Absolute ceiling for the panels on tall screens. */
 private val PANEL_MAX_HEIGHT = 320.dp
 
+/** List item type of a compaction marker, which looks nothing like a user message. */
+private const val COMPACTION_CONTENT_TYPE = "compaction"
+
 /** How close to the end still counts as "at the bottom" for following. */
 private val FOLLOW_TOLERANCE = 48.dp
 
@@ -528,14 +532,23 @@ private fun MessageList(chat: ChatState, onEdit: (String) -> Unit, modifier: Mod
     // Read once here: the item lambda captured the whole chat state and was
     // recreated on every streamed token.
     val editEnabled = !chat.reverting
+    val states = remember(messages, chat.busy) { messages.compactionStates(chat.busy) }
+    // The same instance while the states stay equal, so a streamed token does
+    // not recreate the item lambda that captures it.
+    val compactions = remember(states) { states }
     LazyColumn(
         state = listState,
         modifier = modifier,
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(messages, key = { it.info.id }, contentType = { it.info.role }) { message ->
-            MessageItem(message, editEnabled = editEnabled, onEdit = onEdit)
+        items(messages, key = { it.info.id }, contentType = { if (it.isCompaction) COMPACTION_CONTENT_TYPE else it.info.role }) { message ->
+            val compaction = compactions[message.info.id]
+            if (compaction != null) {
+                CompactionMarker(compaction)
+            } else {
+                MessageItem(message, editEnabled = editEnabled, onEdit = onEdit)
+            }
         }
     }
 }

@@ -52,6 +52,9 @@
     <string name="chat_thinking">Thinking</string>
     <string name="chat_retrying">Retrying (attempt %1$d)…</string>
     <string name="chat_context_compacted">context compacted</string>
+    <string name="chat_compacting">compacting context…</string>
+    <string name="chat_session_compacted">session compacted</string>
+    <string name="chat_compaction_unfinished">compaction not finished</string>
     <string name="chat_step">step</string>
     <string name="chat_subtask">Subtask: %1$s</string>
     <string name="chat_agent">Agent: %1$s</string>
@@ -144,6 +147,8 @@
     <string name="error_load_sessions">Failed to load sessions</string>
     <string name="error_send_prompt">Failed to send prompt</string>
     <string name="error_abort">Failed to abort</string>
+    <string name="error_compact">Failed to compact the session</string>
+    <string name="error_compact_empty">Nothing to compact yet</string>
     <string name="error_run_stalled">No response from the server; the run may have stalled.</string>
     <string name="error_reply_permission">Failed to reply to permission</string>
     <string name="error_reply_question">Failed to reply to question</string>

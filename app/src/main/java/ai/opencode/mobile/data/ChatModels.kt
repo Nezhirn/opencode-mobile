@@ -8,6 +8,8 @@ import ai.opencode.mobile.data.remote.Todo
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 sealed interface ConnectionState {
@@ -24,7 +26,45 @@ data class ChatMessageUi(
 ) {
     /** An optimistic copy of a sent prompt, shown until the server echoes it. */
     val isLocalEcho: Boolean get() = info.id.startsWith(LOCAL_ID_PREFIX)
+
+    /** The marker a compaction adds to the history; its summary is the answer to it. */
+    val isCompaction: Boolean get() = info.role == USER_ROLE && parts.any { it.type == COMPACTION_PART_TYPE }
+
+    /** The summary a compaction wrote; later prompts get it instead of the history before it. */
+    val isSummary: Boolean get() = info.role == ASSISTANT_ROLE && (info.summary as? JsonPrimitive)?.booleanOrNull == true
 }
+
+/** How far the compaction a [ChatMessageUi.isCompaction] message started got. */
+enum class CompactionState { Running, Done, Unfinished }
+
+/**
+ * The state of every compaction in [this] list, by the id of its marker. Done
+ * once its summary finished without error, as the server counts it; running
+ * while the chat is busy and nothing was asked after it.
+ */
+internal fun List<ChatMessageUi>.compactionStates(busy: Boolean): Map<String, CompactionState> {
+    if (none { it.isCompaction }) return emptyMap()
+    val states = HashMap<String, CompactionState>()
+    forEachIndexed { index, message ->
+        if (!message.isCompaction) return@forEachIndexed
+        val later = subList(index + 1, size)
+        val done = later.any { reply ->
+            reply.isSummary && reply.info.parentID == message.info.id && reply.info.finish != null && reply.info.error == null
+        }
+        states[message.info.id] = when {
+            done -> CompactionState.Done
+            busy && later.none { it.info.role == USER_ROLE } -> CompactionState.Running
+            else -> CompactionState.Unfinished
+        }
+    }
+    return states
+}
+
+/** The commands typed as a prompt that compact the session instead (as in the web client and the TUI). */
+private val COMPACT_COMMANDS = setOf("/compact", "/summarize")
+
+/** Whether [text] is the compact command rather than a prompt. */
+internal fun isCompactCommand(text: String): Boolean = text.trim().lowercase() in COMPACT_COMMANDS
 
 @Immutable
 data class ChatState(
@@ -130,6 +170,8 @@ internal class LiveChanges {
 }
 
 internal const val USER_ROLE = "user"
+internal const val ASSISTANT_ROLE = "assistant"
+internal const val COMPACTION_PART_TYPE = "compaction"
 internal const val TEXT_PART_TYPE = "text"
 
 /**

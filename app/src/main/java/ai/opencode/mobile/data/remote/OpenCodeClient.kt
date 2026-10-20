@@ -130,11 +130,20 @@ class OpenCodeClient(
      * Bodies larger than [maxBodyBytes] are refused instead of read: the whole
      * body is held in memory, and a huge file or diff ran the app out of it.
      */
-    private suspend fun fetch(request: Request, maxBodyBytes: Long = MAX_BODY_BYTES): HttpResult {
+    private suspend fun fetch(
+        request: Request,
+        maxBodyBytes: Long = MAX_BODY_BYTES,
+        longRunning: Boolean = false,
+    ): HttpResult {
         // A POST that already reached the server must not be replayed after a
         // connection reset: a repeated prompt_async runs the prompt twice.
-        val http = if (request.method == "GET") client else noRetryClient
-        val call = http.newCall(request).apply { applyTimeout(requestTimeoutMillis(request)) }
+        val http = when {
+            longRunning -> if (allowInsecureTls) insecureLongRunningClient else sharedLongRunningClient
+            request.method == "GET" -> client
+            else -> noRetryClient
+        }
+        val timeout = if (longRunning) LONG_RUNNING_TIMEOUT_MILLIS else requestTimeoutMillis(request)
+        val call = http.newCall(request).apply { applyTimeout(timeout) }
         return suspendCancellableCoroutine { continuation ->
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(
@@ -199,9 +208,10 @@ class OpenCodeClient(
         path: String,
         query: Map<String, String?> = emptyMap(),
         body: RequestBody? = null,
+        longRunning: Boolean = false,
     ) {
         val request = newRequest(method, path, query, body)
-        val response = fetch(request)
+        val response = fetch(request, longRunning = longRunning)
         if (!response.isSuccessful) {
             throw OpenCodeException(response.code, extractError(response.text, response.message))
         }
@@ -258,6 +268,7 @@ class OpenCodeClient(
         is PermissionReplyRequest -> PermissionReplyRequest.serializer()
         is QuestionReplyRequest -> QuestionReplyRequest.serializer()
         is RevertRequest -> RevertRequest.serializer()
+        is SummarizeRequest -> SummarizeRequest.serializer()
         else -> error("No serializer registered for ${value::class}")
     }
 
@@ -352,6 +363,21 @@ class OpenCodeClient(
 
     suspend fun abort(sessionId: String) =
         executeUnit("POST", "/session/$sessionId/abort")
+
+    /**
+     * Compacts the session (the web client's `/compact`): the server adds a
+     * message marking the compaction and has [model] summarize the history,
+     * which later prompts get in place of it. The call only returns once the
+     * summary is written, which can take minutes, so it gets no read timeout;
+     * the progress arrives through the event stream as for a prompt.
+     */
+    suspend fun summarize(sessionId: String, model: PromptModel) =
+        executeUnit(
+            "POST",
+            "/session/$sessionId/summarize",
+            body = jsonBody(SummarizeRequest(providerID = model.providerID, modelID = model.modelID)),
+            longRunning = true,
+        )
 
     /**
      * Rolls the session back to just before [messageId]: the message and all
@@ -539,6 +565,14 @@ class OpenCodeClient(
         private val insecureClient: OkHttpClient by lazy { buildBaseClient(insecure = true, logging = true, readTimeoutSeconds = API_READ_TIMEOUT_SECONDS) }
         private val sharedNoRetryClient: OkHttpClient by lazy { sharedClient.newBuilder().retryOnConnectionFailure(false).build() }
         private val insecureNoRetryClient: OkHttpClient by lazy { insecureClient.newBuilder().retryOnConnectionFailure(false).build() }
+
+        // Calls the server answers only when its work is done (a compaction):
+        // nothing arrives until then, so a read timeout would fail them midway.
+        private val sharedLongRunningClient: OkHttpClient by lazy { sharedNoRetryClient.newBuilder().readTimeout(0, TimeUnit.SECONDS).build() }
+        private val insecureLongRunningClient: OkHttpClient by lazy { insecureNoRetryClient.newBuilder().readTimeout(0, TimeUnit.SECONDS).build() }
+
+        /** Ceiling for a long-running call as a whole. */
+        private const val LONG_RUNNING_TIMEOUT_MILLIS = 30 * 60_000L
 
         // SSE streams must NOT use BODY logging: HttpLoggingInterceptor reads the
         // whole response body (source.request(Long.MAX_VALUE)) before returning,

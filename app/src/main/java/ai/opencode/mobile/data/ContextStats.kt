@@ -58,8 +58,6 @@ data class ContextStats(
     val systemPrompt: String? = null,
 )
 
-private const val ASSISTANT_ROLE = "assistant"
-
 /** Rough characters per token, as the web client estimates. */
 private const val CHARS_PER_TOKEN = 4.0
 

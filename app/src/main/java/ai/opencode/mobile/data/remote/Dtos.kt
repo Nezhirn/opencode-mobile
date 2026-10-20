@@ -191,6 +191,14 @@ data class PromptRequest(
     val parts: List<PromptPart> = emptyList(),
 )
 
+/** Body of `POST /session/{id}/summarize`: the model that writes the summary. */
+@Serializable
+data class SummarizeRequest(
+    @SerialName("providerID") val providerID: String,
+    @SerialName("modelID") val modelID: String,
+    val auto: Boolean = false,
+)
+
 @Serializable
 data class RevertRequest(
     @SerialName("messageID") val messageID: String,

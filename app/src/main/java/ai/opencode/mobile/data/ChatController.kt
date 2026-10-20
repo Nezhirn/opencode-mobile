@@ -260,6 +260,9 @@ internal class ChatController(
         if ((trimmed.isEmpty() && attachments.isEmpty()) || sessionId == null || client == null) {
             return CompletableDeferred(false)
         }
+        // The model would only get the command as text: the web client and the
+        // TUI run it, and so does this one.
+        if (attachments.isEmpty() && isCompactCommand(trimmed)) return compact(client, sessionId)
         return scope.async {
             val ready = when (val check = selection.checkSendable()) {
                 is SendSelection.Rejected -> {
@@ -322,6 +325,73 @@ internal class ChatController(
                 }
                 .isSuccess
         }
+    }
+
+    /**
+     * Compacts the session with the selected model, as `/compact` does in the
+     * web client: the server marks the point, summarizes everything before it
+     * and later prompts get the summary instead of the history. The chat shows
+     * the run like a prompt's — busy with Stop, the summary streaming in — from
+     * the events; the request itself only returns once it is done.
+     *
+     * Completes with whether the server took it, as soon as that is known: at
+     * once when it refused, after a short grace period otherwise, so the field
+     * does not wait minutes to know the command needs no giving back.
+     */
+    private fun compact(client: OpenCodeClient, sessionId: String): Deferred<Boolean> {
+        val ready = when (val check = selection.checkSendable()) {
+            is SendSelection.Rejected -> {
+                _state.updateIfCurrent(sessionId) { state -> state.copy(error = check.message) }
+                return CompletableDeferred(false)
+            }
+            is SendSelection.Ready -> check
+        }
+        val state = _state.value
+        if (state.sessionId != sessionId) return CompletableDeferred(false)
+        if (state.visibleMessages.none { it.info.role == USER_ROLE && !it.isLocalEcho && !it.isCompaction }) {
+            _state.updateIfCurrent(sessionId) { current -> current.copy(error = uiText(R.string.error_compact_empty)) }
+            return CompletableDeferred(false)
+        }
+        val accepted = CompletableDeferred<Boolean>()
+        statusEpoch.incrementAndGet()
+        // The server commits a rollback before compacting, as before a prompt.
+        var hidden: Set<String> = emptySet()
+        _state.updateIfCurrent(sessionId) { current ->
+            hidden = current.revertedMessageIds()
+            current.committedRevert().copy(busy = true, error = null)
+        }
+        loadChanges?.removedMessages?.addAll(hidden)
+        armBusyWatchdog()
+        scope.launch {
+            val request = launch {
+                catchingNonCancellation { client.summarize(sessionId, ready.model) }
+                    .onSuccess { accepted.complete(true) }
+                    .onFailure { error ->
+                        Log.w(TAG, "compact($sessionId) failed", error)
+                        accepted.complete(false)
+                        loadChanges?.removedMessages?.removeAll(hidden)
+                        // Stop ends the request too, and a failed summary is
+                        // reported by session.error: only a chat still waiting
+                        // on this request learns about the failure from it.
+                        _state.updateIfCurrent(sessionId) { current ->
+                            if (!current.busy) {
+                                current
+                            } else {
+                                current.copy(busy = false, error = error.toUiText(R.string.error_compact))
+                            }
+                        }
+                        if (hidden.isNotEmpty() && currentSessionId == sessionId) {
+                            // Whether the rollback was committed before the
+                            // failure is unknown: read back what the server has.
+                            resync()
+                            refreshRevert(client, sessionId)
+                        }
+                    }
+            }
+            delay(COMPACT_ACCEPT_GRACE_MILLIS)
+            if (request.isActive) accepted.complete(true)
+        }
+        return accepted
     }
 
     fun abort() {
@@ -578,6 +648,13 @@ internal class ChatController(
 
             "session.error" -> handleSessionError(props)
 
+            "session.compacted" -> {
+                // The summary is in: read the chat back so it shows exactly what
+                // the server keeps, whatever the stream may have missed.
+                val sessionId = props.stringOrNull("sessionID") ?: return
+                if (sessionId == currentSessionId) resync()
+            }
+
             "todo.updated" -> {
                 // Strict: a subagent's own todo list must not replace the chat's.
                 val sessionId = props.stringOrNull("sessionID") ?: currentSessionId ?: return
@@ -729,6 +806,9 @@ internal class ChatController(
         const val WATCHDOG_INTERVAL_MILLIS = 30_000L
         const val SILENCE_BEFORE_CHECK_MILLIS = 120_000L
         const val MESSAGE_ABORTED_ERROR = "MessageAbortedError"
+
+        /** A compaction still running after this was accepted; a refusal comes sooner. */
+        const val COMPACT_ACCEPT_GRACE_MILLIS = 2_000L
     }
 }
 
