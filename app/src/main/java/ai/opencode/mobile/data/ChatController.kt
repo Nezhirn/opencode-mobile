@@ -1,6 +1,7 @@
 package ai.opencode.mobile.data
 
 import ai.opencode.mobile.R
+import ai.opencode.mobile.data.remote.MessageWithParts
 import ai.opencode.mobile.data.remote.OpenCodeClient
 import ai.opencode.mobile.data.remote.PromptPart
 import ai.opencode.mobile.data.remote.PromptRequest
@@ -117,7 +118,7 @@ internal class ChatController(
                 loading = true,
                 revert = session?.revert?.takeIf { it.messageID.isNotBlank() },
             )
-            launchLoad(client, sessionId)
+            launchLoad(client, sessionId, tailOnly = false)
         }
         session?.model?.let(selection::adoptSessionModel)
     }
@@ -165,7 +166,7 @@ internal class ChatController(
                 resyncPending = true
                 return
             }
-            launchLoad(client, sessionId)
+            launchLoad(client, sessionId, tailOnly = true)
         }
     }
 
@@ -177,14 +178,20 @@ internal class ChatController(
         loadChanges = null
     }
 
-    /** Starts loading [sessionId], then again for every resync asked for meanwhile. Called under [loadLock]. */
-    private fun launchLoad(client: OpenCodeClient, sessionId: String) {
+    /**
+     * Starts loading [sessionId], then again for every resync asked for
+     * meanwhile; those only read the newest messages ([tailOnly]). Called under
+     * [loadLock].
+     */
+    private fun launchLoad(client: OpenCodeClient, sessionId: String, tailOnly: Boolean) {
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val self = coroutineContext[Job]
             try {
                 var current: OpenCodeClient = client
+                var tail = tailOnly
                 while (true) {
-                    load(current, sessionId)
+                    load(current, sessionId, tail)
+                    tail = true
                     val again = synchronized(loadLock) {
                         val again = resyncPending && currentSessionId == sessionId
                         resyncPending = false
@@ -202,7 +209,7 @@ internal class ChatController(
         job.start()
     }
 
-    private suspend fun load(client: OpenCodeClient, sessionId: String) {
+    private suspend fun load(client: OpenCodeClient, sessionId: String, tailOnly: Boolean = false) {
         val epoch = statusEpoch.get()
         // What was on screen before the request: anything else found in the
         // state afterwards arrived through events while the snapshot loaded.
@@ -211,14 +218,8 @@ internal class ChatController(
             .orEmpty()
         val changes = LiveChanges()
         loadChanges = changes
-        catchingNonCancellation { client.getMessages(sessionId) }
-            .onSuccess { messages ->
-                // Duplicate or blank ids would crash the LazyColumn that keys on
-                // them; the incremental paths dedupe, this bulk load did not.
-                val ui = messages
-                    .filter { it.info.id.isNotBlank() }
-                    .distinctBy { it.info.id }
-                    .map { it.toUi() }
+        catchingNonCancellation { readHistory(client, sessionId, tailOnly) }
+            .onSuccess { ui ->
                 // Buffered deltas belong to the state being merged; flushing them
                 // first keeps them from being appended to the fresh snapshot.
                 synchronized(deltaLock) {
@@ -242,6 +243,27 @@ internal class ChatController(
                 if (statusEpoch.get() == epoch) applyBusy(sessionId, isBusyStatus(statuses[sessionId]?.type))
             }
             .onFailure { Log.w(TAG, "load($sessionId) status failed", it) }
+    }
+
+    /**
+     * The chat as the server has it. A resync after the stream reopened reads
+     * only the newest messages and keeps the older ones on screen: reading the
+     * whole history, which can be many megabytes, on every reconnect of a
+     * flaky mobile link wasted data and memory. When the newest messages do not
+     * reach back to what is on screen (much happened in the gap), it reads all.
+     */
+    private suspend fun readHistory(client: OpenCodeClient, sessionId: String, tailOnly: Boolean): List<ChatMessageUi> {
+        if (tailOnly) {
+            val tail = client.getMessages(sessionId, limit = RESYNC_TAIL_MESSAGES).toUiMessages()
+            if (tail.size < RESYNC_TAIL_MESSAGES) return tail
+            val live = _state.value.takeIf { it.sessionId == sessionId }?.messages.orEmpty()
+            val joinAt = live.indexOfFirst { it.info.id == tail.first().info.id }
+            if (joinAt >= 0) {
+                val tailIds = tail.mapTo(HashSet()) { it.info.id }
+                return live.subList(0, joinAt).filter { !it.isLocalEcho && it.info.id !in tailIds } + tail
+            }
+        }
+        return client.getMessages(sessionId).toUiMessages()
     }
 
     private fun applyBusy(sessionId: String, busy: Boolean) {
@@ -807,10 +829,20 @@ internal class ChatController(
         const val SILENCE_BEFORE_CHECK_MILLIS = 120_000L
         const val MESSAGE_ABORTED_ERROR = "MessageAbortedError"
 
+        /** Messages a resync reads; see [readHistory]. */
+        const val RESYNC_TAIL_MESSAGES = 50
+
         /** A compaction still running after this was accepted; a refusal comes sooner. */
         const val COMPACT_ACCEPT_GRACE_MILLIS = 2_000L
     }
 }
+
+/**
+ * Duplicate or blank ids would crash the LazyColumn that keys on them; the
+ * incremental paths dedupe, a bulk load must too.
+ */
+private fun List<MessageWithParts>.toUiMessages(): List<ChatMessageUi> =
+    filter { it.info.id.isNotBlank() }.distinctBy { it.info.id }.map { it.toUi() }
 
 /**
  * [runCatching] that does not swallow coroutine cancellation: a cancelled load

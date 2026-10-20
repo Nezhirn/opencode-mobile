@@ -26,6 +26,7 @@ internal fun uiText(@StringRes id: Int, vararg args: Any): UiText = UiText.Res(i
 /** The error's own message when it has one, otherwise the localised [fallback]. */
 internal fun Throwable.toUiText(@StringRes fallback: Int, vararg args: Any): UiText {
     if (this is ResponseTooLargeException) {
+        if (outOfMemory) return UiText.Res(R.string.error_response_out_of_memory, emptyList())
         return UiText.Res(R.string.error_response_too_large, listOf((limitBytes / (1024 * 1024)).toInt()))
     }
     return message?.takeIf { it.isNotBlank() }?.let(UiText::Raw) ?: UiText.Res(fallback, args.toList())

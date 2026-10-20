@@ -2,6 +2,7 @@ package ai.opencode.mobile.data
 
 import ai.opencode.mobile.data.remote.Message
 import ai.opencode.mobile.data.remote.Part
+import ai.opencode.mobile.data.remote.SessionTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -135,5 +136,62 @@ class LocalEchoTest {
         val result = state(streaming).withMessagesIfCurrent("ses_1", snapshot, knownBefore = setOf("msg_a"))
 
         assertEquals("Hello, wor", result.messages.single().parts.single().text)
+    }
+
+    @Test
+    fun aPartBeforeItsMessageTakesOverTheEcho() {
+        val result = state(localUserMessage("local-1", "hello"))
+            .upsertPart(textPart("msg_u", "prt_1", "hello"), createMissingMessage = true)
+            .applyMessageUpdate(userMessage("msg_u"))
+
+        // One prompt, shown as the user's, not a second bubble rendered as an answer.
+        val message = result.messages.single()
+        assertEquals("msg_u", message.info.id)
+        assertEquals("user", message.info.role)
+        assertEquals(listOf("prt_1"), message.parts.map { it.id })
+    }
+
+    @Test
+    fun aStubForAnotherPartStillConsumesTheEchoOnceItsMessageArrives() {
+        // A part that is not the prompt's text (a file) created a stub.
+        val file = Part(id = "prt_f", sessionID = "ses_1", messageID = "msg_u", type = "file", filename = "a.txt")
+        val result = state(localUserMessage("local-1", "hello"))
+            .upsertPart(file, createMissingMessage = true)
+            .applyMessageUpdate(userMessage("msg_u"))
+
+        assertEquals(listOf("msg_u"), result.messages.map { it.info.id })
+        assertFalse(result.messages.single().isLocalEcho)
+
+        val next = result.copy(messages = result.messages + localUserMessage("local-2", "next"))
+            .applyMessageUpdate(userMessage("msg_v"))
+        assertEquals("the next prompt consumes its own echo", listOf("msg_u", "msg_v"), next.messages.map { it.info.id })
+    }
+
+    @Test
+    fun anOlderPromptWithTheSameTextDoesNotConsumeTheEcho() {
+        // Sent while the chat was loading; the history has the same words from an hour ago.
+        val echo = localUserMessage("local-1", "continue")
+        val sentAt = echo.info.time!!.created
+        val old = ChatMessageUi(
+            userMessage("msg_old").copy(time = SessionTime(created = sentAt - 3_600_000)),
+            listOf(textPart("msg_old", "prt_old", "continue")),
+        )
+
+        val result = state(echo).withMessagesIfCurrent("ses_1", listOf(old))
+
+        assertEquals(listOf("msg_old", "local-1"), result.messages.map { it.info.id })
+    }
+
+    @Test
+    fun theServerCopyOfTheEchoStillConsumesIt() {
+        val echo = localUserMessage("local-1", "continue")
+        val copy = ChatMessageUi(
+            userMessage("msg_new").copy(time = SessionTime(created = echo.info.time!!.created + 500)),
+            listOf(textPart("msg_new", "prt_new", "continue")),
+        )
+
+        val result = state(echo).withMessagesIfCurrent("ses_1", listOf(copy))
+
+        assertEquals(listOf("msg_new"), result.messages.map { it.info.id })
     }
 }

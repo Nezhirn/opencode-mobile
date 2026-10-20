@@ -4,6 +4,7 @@ import ai.opencode.mobile.data.remote.Message
 import ai.opencode.mobile.data.remote.MessageWithParts
 import ai.opencode.mobile.data.remote.Part
 import ai.opencode.mobile.data.remote.SessionRevert
+import ai.opencode.mobile.data.remote.SessionTime
 import ai.opencode.mobile.data.remote.Todo
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -198,7 +199,9 @@ internal fun localUserMessage(id: String, text: String, attachments: List<Attach
             url = attachment.url,
         )
     }
-    return ChatMessageUi(info = Message(id = id, role = USER_ROLE), parts = textParts + fileParts)
+    // When it was sent, so a snapshot only matches it to a message created since.
+    val info = Message(id = id, role = USER_ROLE, time = SessionTime(created = System.currentTimeMillis()))
+    return ChatMessageUi(info = info, parts = textParts + fileParts)
 }
 
 /** What the user typed in [this] message, without synthetic parts. */
@@ -237,7 +240,24 @@ internal fun ChatState.upsertMessage(info: Message): ChatState {
  * e.g. when a summary is attached) never consume an echo.
  */
 internal fun ChatState.applyMessageUpdate(info: Message): ChatState {
-    if (messages.any { it.info.id == info.id }) return upsertMessage(info)
+    val knownIndex = messages.indexOfFirst { it.info.id == info.id }
+    if (knownIndex >= 0) {
+        val known = messages[knownIndex]
+        // A stub made for parts that arrived before this event still has its
+        // echo waiting: left there, the prompt showed twice and every later
+        // prompt consumed the echo of the one before.
+        val echoIndex = if (info.role == USER_ROLE && known.info.role.isBlank()) messages.indexOfFirst { it.isLocalEcho } else -1
+        if (echoIndex < 0) return upsertMessage(info)
+        val echo = messages[echoIndex]
+        val merged = ChatMessageUi(
+            info = info,
+            parts = known.parts.ifEmpty { echo.parts.map { it.copy(messageID = info.id) } },
+        )
+        val updated = messages.toMutableList()
+        updated[echoIndex] = merged
+        updated.removeAt(knownIndex)
+        return copy(messages = updated)
+    }
     if (info.role == USER_ROLE) {
         val echoIndex = messages.indexOfFirst { it.isLocalEcho }
         if (echoIndex >= 0) {
@@ -264,6 +284,22 @@ internal fun ChatState.upsertPart(part: Part, createMissingMessage: Boolean = fa
     val messageIndex = messages.indexOfFirst { it.info.id == part.messageID }
     if (messageIndex < 0) {
         if (!createMissingMessage || part.messageID.isBlank()) return this
+        // The text of a prompt still shown as its echo: the echo becomes that
+        // message. A stub instead had no role, so the prompt briefly showed as
+        // an answer, next to its own echo.
+        val echoIndex = if (part.type == TEXT_PART_TYPE && part.synthetic != true) {
+            messages.indexOfFirst { it.isLocalEcho && it.userText() == part.text?.trim() }
+        } else {
+            -1
+        }
+        if (echoIndex >= 0) {
+            val echo = messages[echoIndex]
+            val adopted = ChatMessageUi(
+                info = echo.info.copy(id = part.messageID, sessionID = part.sessionID),
+                parts = echo.parts.filterNot { it.type == TEXT_PART_TYPE }.map { it.copy(messageID = part.messageID) } + part,
+            )
+            return copy(messages = messages.toMutableList().also { it[echoIndex] = adopted })
+        }
         val stub = ChatMessageUi(
             info = Message(id = part.messageID, sessionID = part.sessionID),
             parts = listOf(part),
@@ -325,15 +361,13 @@ internal fun ChatState.withMessagesIfCurrent(
     val liveById = this.messages.associateBy { it.info.id }
     val snapshotIds = messages.mapTo(HashSet()) { it.info.id }
     val merged = messages.map { message -> liveById[message.info.id]?.let { message.mergedWith(it, changes) } ?: message }
-    // User texts the server has that the live state does not know by id: each
-    // can account for one echo.
-    val unmatchedTexts = messages
-        .filter { it.info.role == USER_ROLE && it.info.id !in liveById }
-        .mapTo(ArrayList()) { it.userText() }
+    // User messages the server has that the live state does not know by id:
+    // each can account for one echo.
+    val unmatched = messages.filterTo(ArrayList()) { it.info.role == USER_ROLE && it.info.id !in liveById }
     val extras = this.messages.filter { message ->
         when {
             message.info.id in snapshotIds -> false
-            message.isLocalEcho -> !unmatchedTexts.remove(message.userText())
+            message.isLocalEcho -> !unmatched.removeMatchFor(message)
             else -> message.info.id !in knownBefore
         }
     }
@@ -341,6 +375,27 @@ internal fun ChatState.withMessagesIfCurrent(
     // because the chat was read back afterwards.
     return copy(messages = merged + extras, loading = false)
 }
+
+/**
+ * Removes the server copy of [echo] from [this] and says whether there was one:
+ * the same text, created no earlier than the echo was sent. Text alone matched
+ * an older prompt with the same words ("continue") while a chat was loading,
+ * and the echo of the new one vanished. The clocks of phone and server differ
+ * a little, hence the margin.
+ */
+private fun MutableList<ChatMessageUi>.removeMatchFor(echo: ChatMessageUi): Boolean {
+    val text = echo.userText()
+    val sentAt = echo.info.time?.created ?: 0
+    val index = indexOfFirst { candidate ->
+        val createdAt = candidate.info.time?.created ?: 0
+        candidate.userText() == text && (sentAt <= 0 || createdAt <= 0 || createdAt >= sentAt - ECHO_CLOCK_MARGIN_MILLIS)
+    }
+    if (index < 0) return false
+    removeAt(index)
+    return true
+}
+
+private const val ECHO_CLOCK_MARGIN_MILLIS = 120_000L
 
 /** The snapshot copy of a message, keeping what is live and ahead of it. */
 private fun ChatMessageUi.mergedWith(live: ChatMessageUi, changes: LiveChanges?): ChatMessageUi {

@@ -57,7 +57,8 @@ internal fun ProjectFilePickerSheet(
     val entries = remember(state.entries, state.found, state.query) {
         val query = state.query.trim()
         if (query.isEmpty()) {
-            state.entries.map { PickerEntry(it.path.trimEnd('/'), it.type == "directory") }
+            // Deduped like the search results: a repeated key crashes the list.
+            state.entries.map { PickerEntry(it.path.trimEnd('/'), it.type == "directory") }.distinctBy { it.path }
         } else {
             val local = state.entries
                 .filter { it.name.contains(query, ignoreCase = true) }

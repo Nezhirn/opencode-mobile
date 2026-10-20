@@ -160,7 +160,7 @@ class OpenCodeClient(
                         val result = try {
                             response.use { HttpResult(it.code, it.message, it.isSuccessful, it.readBody(maxBodyBytes)) }
                         } catch (error: OutOfMemoryError) {
-                            continuation.resumeWithException(ResponseTooLargeException(maxBodyBytes))
+                            continuation.resumeWithException(ResponseTooLargeException(maxBodyBytes, outOfMemory = true))
                             return
                         } catch (error: Throwable) {
                             continuation.resumeWithException(error)
@@ -198,7 +198,7 @@ class OpenCodeClient(
             try {
                 json.decodeFromString(deserializer, text)
             } catch (error: OutOfMemoryError) {
-                throw ResponseTooLargeException(maxBodyBytes)
+                throw ResponseTooLargeException(maxBodyBytes, outOfMemory = true)
             }
         }
     }
@@ -224,6 +224,10 @@ class OpenCodeClient(
      */
     private fun requestTimeoutMillis(request: Request): Long {
         if (request.url.encodedPath.endsWith("/event")) return 0
+        // A download has no size known up front: a chat's history with a few
+        // images took longer than two minutes on a slow link, failed, and failed
+        // again on every resync. The read timeout still ends a stalled one.
+        if (request.method == "GET") return 0
         val bodyBytes = request.body?.contentLength()?.coerceAtLeast(0) ?: 0
         return REQUEST_TIMEOUT_MILLIS + bodyBytes / UPLOAD_BYTES_PER_EXTRA_SECOND * 1_000
     }
@@ -344,9 +348,13 @@ class OpenCodeClient(
     suspend fun getSession(sessionId: String): Session =
         execute(newRequest("GET", "/session/$sessionId"), Session.serializer())
 
-    suspend fun getMessages(sessionId: String): List<MessageWithParts> =
+    /**
+     * The session's messages, oldest first: all of them, or with [limit] only
+     * that many of the newest (servers without paging send all of them anyway).
+     */
+    suspend fun getMessages(sessionId: String, limit: Int? = null): List<MessageWithParts> =
         execute(
-            newRequest("GET", "/session/$sessionId/message"),
+            newRequest("GET", "/session/$sessionId/message", query = mapOf("limit" to limit?.toString())),
             ListSerializer(MessageWithParts.serializer()),
             maxBodyBytes = MAX_HISTORY_BYTES,
         )
@@ -547,8 +555,12 @@ class OpenCodeClient(
         /** Default cap on a response body; bodies are read into memory whole. */
         internal const val MAX_BODY_BYTES = 32 * MB
 
-        /** A chat's history carries every file sent in it, base64-encoded. */
-        internal const val MAX_HISTORY_BYTES = 64 * MB
+        /**
+         * A chat's history carries every file sent in it, base64-encoded. In
+         * practice unlimited: the memory the app gets is what bounds it, and
+         * running out is reported as [ResponseTooLargeException], not a crash.
+         */
+        internal const val MAX_HISTORY_BYTES = 100 * 1024 * MB
         internal const val MAX_FILE_BYTES = 8 * MB
         internal const val MAX_DIFF_BYTES = 16 * MB
 
@@ -652,9 +664,12 @@ class OpenCodeClient(
 
 class OpenCodeException(val code: Int, override val message: String) : IOException(message)
 
-/** The server's answer was too large to hold in memory. */
-class ResponseTooLargeException(val limitBytes: Long) :
-    IOException("Response is larger than ${limitBytes / (1024 * 1024)} MB")
+/**
+ * The server's answer was too large to hold in memory: over [limitBytes], or
+ * [outOfMemory] when the device ran out of memory before reaching the limit.
+ */
+class ResponseTooLargeException(val limitBytes: Long, val outOfMemory: Boolean = false) :
+    IOException(if (outOfMemory) "Not enough memory for the response" else "Response is larger than ${limitBytes / (1024 * 1024)} MB")
 
 /**
  * The body as text, refusing more than [maxBytes]: a declared length is checked

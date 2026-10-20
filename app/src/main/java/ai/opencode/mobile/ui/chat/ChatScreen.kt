@@ -3,11 +3,15 @@ package ai.opencode.mobile.ui.chat
 import ai.opencode.mobile.R
 import ai.opencode.mobile.data.ChatMessageUi
 import ai.opencode.mobile.data.ChatState
+import ai.opencode.mobile.data.USER_ROLE
 import ai.opencode.mobile.data.compactionStates
 import ai.opencode.mobile.data.messageErrorText
 import ai.opencode.mobile.data.userText
 import ai.opencode.mobile.ui.asString
+import ai.opencode.mobile.ui.components.LocalRevealLimits
 import ai.opencode.mobile.ui.components.TruncatedText
+import ai.opencode.mobile.ui.markdown.markdownColors
+import ai.opencode.mobile.ui.markdown.prewarmMarkdown
 import ai.opencode.mobile.ui.mcp.McpButton
 import ai.opencode.mobile.ui.mcp.McpSheet
 import android.os.Build
@@ -57,6 +61,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -92,7 +98,17 @@ fun ChatScreen(
     onOpenFiles: (String) -> Unit,
 ) {
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.Factory)
-    val chat by viewModel.chat.collectAsStateWithLifecycle()
+    // Not read here as a whole: the chat state changes with every streamed batch
+    // of tokens (20 times a second), and reading it here recomposed the whole
+    // screen each time. The screen reads only the fields it shows, each of
+    // which changes rarely; the message list reads the rest.
+    val chatState = viewModel.chat.collectAsStateWithLifecycle()
+    val title by remember { derivedStateOf { chatState.value.title } }
+    val todos by remember { derivedStateOf { chatState.value.todos } }
+    val chatError by remember { derivedStateOf { chatState.value.error } }
+    val busy by remember { derivedStateOf { chatState.value.busy } }
+    val reverting by remember { derivedStateOf { chatState.value.reverting } }
+    val revertedUserMessages by remember { derivedStateOf { chatState.value.revertedUserMessages } }
     val permissions by viewModel.permissions.collectAsStateWithLifecycle()
     val questions by viewModel.questions.collectAsStateWithLifecycle()
     val replying by viewModel.replying.collectAsStateWithLifecycle()
@@ -137,7 +153,10 @@ fun ChatScreen(
         viewModel.focusPrompt.collect { runCatching { promptFocus.requestFocus() } }
     }
 
-    CompositionLocalProvider(LocalExpandedItems provides viewModel.expandedItems) {
+    CompositionLocalProvider(
+        LocalExpandedItems provides viewModel.expandedItems,
+        LocalRevealLimits provides viewModel.revealLimits,
+    ) {
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -147,7 +166,7 @@ fun ChatScreen(
                         // something the user has to infer.
                         Column(modifier = Modifier.clickable { showModelSheet = true }) {
                             Text(
-                                text = chat.title.ifBlank { stringResource(R.string.chat_title) },
+                                text = title.ifBlank { stringResource(R.string.chat_title) },
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -206,22 +225,22 @@ fun ChatScreen(
                 var bottomHeight by remember { mutableStateOf(0.dp) }
                 var inputBarHeight by remember { mutableStateOf(0.dp) }
                 val panelCount = (if (questions.isNotEmpty()) 1 else 0) + (if (permissions.isNotEmpty()) 1 else 0)
-                val shownTodoHeight = if (chat.todos.isEmpty()) 0.dp else todoHeight
+                val shownTodoHeight = if (todos.isEmpty()) 0.dp else todoHeight
                 val panelBudget = (maxHeight - bottomHeight - shownTodoHeight).coerceAtLeast(0.dp)
                 val panelMaxHeight = minOf(panelBudget * PANEL_SCREEN_FRACTION, PANEL_MAX_HEIGHT) / panelCount.coerceAtLeast(1)
                 // The dock's list is bounded by what the input bar leaves, so that in
                 // landscape with the keyboard open it cannot squeeze the field away.
                 val dockListMaxHeight = ((maxHeight - inputBarHeight) * DOCK_SCREEN_FRACTION).coerceIn(0.dp, DOCK_MAX_HEIGHT)
                 Column(modifier = Modifier.fillMaxSize()) {
-                    if (chat.todos.isNotEmpty()) {
+                    if (todos.isNotEmpty()) {
                         Box(modifier = Modifier.onSizeChanged { size -> todoHeight = with(density) { size.height.toDp() } }) {
-                            TodoStrip(chat.todos)
+                            TodoStrip(todos)
                         }
                     }
 
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         MessageList(
-                            chat = chat,
+                            chatState = chatState,
                             onEdit = onEdit,
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -266,7 +285,7 @@ fun ChatScreen(
                             }
                         }
 
-                        chat.error?.let { error ->
+                        chatError?.let { error ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -305,8 +324,8 @@ fun ChatScreen(
                         }
 
                         RevertDock(
-                            messages = chat.revertedUserMessages,
-                            reverting = chat.reverting,
+                            messages = revertedUserMessages,
+                            reverting = reverting,
                             onRestore = onRestore,
                             listMaxHeight = dockListMaxHeight,
                         )
@@ -314,7 +333,7 @@ fun ChatScreen(
                         InputBar(
                             text = draft,
                             onTextChange = viewModel::onDraftChange,
-                            busy = chat.busy,
+                            busy = busy,
                             onSend = viewModel::send,
                             onStop = viewModel::abort,
                             variants = availableVariants,
@@ -394,7 +413,7 @@ fun ChatScreen(
 
     if (showContext) {
         val stats by viewModel.contextStats.collectAsStateWithLifecycle()
-        ContextSheet(stats = stats, sessionTitle = chat.title, onDismiss = { showContext = false })
+        ContextSheet(stats = stats, sessionTitle = title, onDismiss = { showContext = false })
     }
 
     if (showFilePicker) {
@@ -459,7 +478,8 @@ private const val COMPACTION_CONTENT_TYPE = "compaction"
 private val FOLLOW_TOLERANCE = 48.dp
 
 @Composable
-private fun MessageList(chat: ChatState, onEdit: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun MessageList(chatState: State<ChatState>, onEdit: (String) -> Unit, modifier: Modifier = Modifier) {
+    val chat = chatState.value
     val messages = chat.visibleMessages
     val listState = rememberLazyListState()
     val tolerancePx = with(LocalDensity.current) { FOLLOW_TOLERANCE.roundToPx() }
@@ -510,6 +530,22 @@ private fun MessageList(chat: ChatState, onEdit: (String) -> Unit, modifier: Mod
         // Never fight a finger that is on the list.
         if (!follow || listState.isScrollInProgress) return@LaunchedEffect
         listState.scrollToEnd()
+    }
+
+    // Once the history is in, its replies are parsed in the background, newest
+    // first, so scrolling up through them does not parse each one on the main
+    // thread as it comes into view.
+    val markdownColors = markdownColors()
+    val loaded = chat.sessionId != null && !chat.loading
+    LaunchedEffect(chat.sessionId, loaded, markdownColors) {
+        if (!loaded) return@LaunchedEffect
+        val texts = chatState.value.visibleMessages.asReversed().flatMap { message ->
+            if (message.info.role == USER_ROLE) return@flatMap emptyList()
+            message.parts.asReversed().mapNotNull { part ->
+                part.text?.takeIf { part.type == "text" && part.synthetic != true && part.ignored != true && it.isNotBlank() }
+            }
+        }
+        prewarmMarkdown(texts, markdownColors)
     }
 
     if (chat.loading && messages.isEmpty()) {

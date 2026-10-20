@@ -254,8 +254,14 @@ class AppRepository(private val settingsStore: SettingsSource) {
         scope.launch {
             var boundUrl: String? = null
             var boundDirectory: String? = null
-            combine(clientFlow, retryTick, streamWanted, projectRestoredFor) { client, _, wanted, restoredFor ->
-                Triple(client, wanted, client == null || client.baseUrl == restoredFor)
+            combine(clientFlow, retryTick, streamWanted, projectRestoredFor, activeProject) { client, _, wanted, restoredFor, project ->
+                // The client must also be the one for the project: clientFlow
+                // follows activeProject asynchronously, and a client still
+                // without the restored project connected to the default
+                // instance first, then reconnected and reloaded everything.
+                val ready = client == null ||
+                    (client.baseUrl == restoredFor && client.directory == project?.takeIf { it.baseUrl == client.baseUrl }?.directory)
+                Triple(client, wanted, ready)
             }
                 .collectLatest { (client, wanted, restored) ->
                     if (!restored) return@collectLatest
@@ -374,6 +380,12 @@ class AppRepository(private val settingsStore: SettingsSource) {
                     }
                     staleWatch.cancel()
                 }
+                // A clean close (the server restarting) is no failure, but the
+                // stream is gone all the same: "connected" stayed on screen for
+                // the whole reconnect while every action failed.
+                _connection.value = ConnectionState.Error(
+                    uiText(if (streamedBefore) R.string.error_event_stream else R.string.error_connection),
+                )
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Throwable) {

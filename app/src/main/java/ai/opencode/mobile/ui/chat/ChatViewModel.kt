@@ -12,6 +12,7 @@ import ai.opencode.mobile.data.fileUrlOf
 import ai.opencode.mobile.data.remote.FileNode
 import ai.opencode.mobile.data.remote.PromptModel
 import ai.opencode.mobile.data.uiText
+import ai.opencode.mobile.ui.components.RevealLimits
 import ai.opencode.mobile.ui.repository
 import android.content.ContentResolver
 import android.net.Uri
@@ -121,6 +122,9 @@ class ChatViewModel(
 
     /** Expanded cards of the chat; memory only, see [ExpandedItems]. */
     val expandedItems = ExpandedItems()
+
+    /** How far long texts of the chat were revealed; memory only, like [expandedItems]. */
+    val revealLimits = RevealLimits()
 
     /**
      * Files picked on the phone that are still being read. Sending waits for

@@ -86,4 +86,15 @@ class EventStreamResyncTest {
         assertEquals("per_1", permissions.single().id)
         assertTrue(eventStreams.get() >= 2)
     }
+
+    @Test
+    fun aStreamTheServerClosesDoesNotStayConnected() = runBlocking {
+        val repository = AppRepository(FakeSettingsSource(ConnectionSettings(baseUrl = server.url("/").toString())))
+
+        // Each stream here ends cleanly after its first event, as on a server
+        // restart: until it is back, the app must not claim to be connected.
+        withTimeout(15_000) { repository.connection.first { it is ConnectionState.Connected } }
+        val after = withTimeout(15_000) { repository.connection.first { it is ConnectionState.Error } }
+        assertTrue(after is ConnectionState.Error)
+    }
 }

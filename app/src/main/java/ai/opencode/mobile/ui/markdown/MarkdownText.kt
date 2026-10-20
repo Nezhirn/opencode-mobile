@@ -3,6 +3,7 @@ package ai.opencode.mobile.ui.markdown
 import ai.opencode.mobile.ui.components.RevealableText
 import ai.opencode.mobile.ui.components.chunkForDisplay
 import ai.opencode.mobile.ui.components.chunkedForLayout
+import ai.opencode.mobile.ui.components.safePrefix
 import ai.opencode.mobile.ui.theme.LocalGnomeAccents
 import android.util.Log
 import androidx.compose.foundation.background
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.withContext
 
@@ -85,12 +87,7 @@ fun MarkdownText(
         initialChars = MARKDOWN_INITIAL_CHARS,
         stepChars = MARKDOWN_STEP_CHARS,
     ) { shown ->
-        val colors = MarkdownColors(
-            link = MaterialTheme.colorScheme.primary,
-            codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest,
-            emphasis = LocalGnomeAccents.current.emphasis,
-        )
-        val blocks = rememberMarkdownBlocks(shown, colors)
+        val blocks = rememberMarkdownBlocks(shown, markdownColors())
         val platformUriHandler = LocalUriHandler.current
         val uriHandler = remember(platformUriHandler) { SafeUriHandler(platformUriHandler) }
         CompositionLocalProvider(LocalUriHandler provides uriHandler) {
@@ -140,6 +137,32 @@ private fun rememberMarkdownBlocks(source: String, colors: MarkdownColors): List
     return parsed.blocks
 }
 
+/** The colours Markdown is parsed with under the current theme. */
+@Composable
+internal fun markdownColors() = MarkdownColors(
+    link = MaterialTheme.colorScheme.primary,
+    codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest,
+    emphasis = LocalGnomeAccents.current.emphasis,
+)
+
+/**
+ * Parses [texts] (newest first) off the main thread into [MarkdownCache], as
+ * [MarkdownText] will show them before "show more". The first composition of a
+ * text parses on the main thread when the cache misses, and flinging up through
+ * a freshly opened chat did that for every long reply it passed. Stops at a
+ * share of the cache, so it cannot push out what is on screen.
+ */
+suspend fun prewarmMarkdown(texts: List<String>, colors: MarkdownColors) = withContext(Dispatchers.Default) {
+    var budget = MarkdownCache.PREWARM_CHARS
+    for (text in texts) {
+        ensureActive()
+        val shown = text.safePrefix(MARKDOWN_INITIAL_CHARS)
+        budget -= shown.length
+        if (budget < 0) break
+        MarkdownCache.parse(shown, colors)
+    }
+}
+
 private class ParsedMarkdown(val source: String, val colors: MarkdownColors, val blocks: List<MdBlock>)
 
 /**
@@ -148,6 +171,9 @@ private class ParsedMarkdown(val source: String, val colors: MarkdownColors, val
  */
 private object MarkdownCache {
     private const val MAX_CHARS = 1_000_000
+
+    /** What [prewarmMarkdown] may fill. */
+    const val PREWARM_CHARS = MAX_CHARS * 3 / 5
     private var chars = 0
     private val entries = LinkedHashMap<Pair<String, MarkdownColors>, List<MdBlock>>(16, 0.75f, true)
 

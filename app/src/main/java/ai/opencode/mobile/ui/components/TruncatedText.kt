@@ -7,14 +7,34 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableIntState
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+
+/**
+ * How far each text was revealed, by state key, for a screen whose texts sit in
+ * a lazy list: a plain remember lost it when the item scrolled out, and the text
+ * collapsed under the finger on the way back. Lives as long as the screen.
+ */
+@Stable
+class RevealLimits {
+    private val states = HashMap<Any, MutableIntState>()
+
+    fun stateFor(key: Any, initial: Int): MutableIntState = synchronized(states) {
+        states.getOrPut(key) { mutableIntStateOf(initial) }
+    }
+}
+
+/** Where [RevealableText] keeps its limit; without one it lasts as long as the item. */
+val LocalRevealLimits = staticCompositionLocalOf<RevealLimits?> { null }
 
 /** Characters rendered before the first "show more". */
 const val INITIAL_DISPLAY_CHARS = 4_000
@@ -112,7 +132,10 @@ fun RevealableText(
     stepChars: Int = DISPLAY_STEP_CHARS,
     content: @Composable (shown: String) -> Unit,
 ) {
-    var limit by remember(stateKey) { mutableIntStateOf(initialChars) }
+    val limits = LocalRevealLimits.current
+    var limit by remember(limits, stateKey) {
+        if (limits != null && stateKey != null && stateKey != Unit) limits.stateFor(stateKey, initialChars) else mutableIntStateOf(initialChars)
+    }
     val shown = remember(text, limit) { text.safePrefix(limit) }
     val hidden = text.length - shown.length
 
