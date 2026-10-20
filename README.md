@@ -6,7 +6,7 @@
 ![minSdk](https://img.shields.io/badge/minSdk-26-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7f52ff?logo=kotlin&logoColor=white)
 ![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285f4?logo=jetpackcompose&logoColor=white)
-![Версия](https://img.shields.io/badge/version-0.4.0-orange)
+![Версия](https://img.shields.io/badge/version-0.5.0-orange)
 
 ---
 

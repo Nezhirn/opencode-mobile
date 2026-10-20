@@ -15,8 +15,8 @@ android {
         applicationId = "ai.opencode.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.4.0"
+        versionCode = 9
+        versionName = "0.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
