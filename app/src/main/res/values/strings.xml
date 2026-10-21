@@ -242,6 +242,7 @@
     <string name="error_server_url_invalid">Enter a server address such as http://192.168.1.10:4096</string>
     <string name="error_response_too_large">The server\'s answer is larger than %1$d MB</string>
     <string name="error_response_out_of_memory">The server\'s answer does not fit in the memory available to the app</string>
+    <string name="error_unauthorized">Wrong username or password. opencode 2 prints its password when the server starts (set a fixed one with OPENCODE_PASSWORD); the username is opencode.</string>
     <string name="error_attachments_total">Attachments of one message may not exceed %1$d MB in total</string>
     <string name="error_attachment_empty">%1$s is empty</string>
     <string name="attach_reading">Reading files…</string>

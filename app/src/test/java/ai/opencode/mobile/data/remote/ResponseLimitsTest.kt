@@ -28,7 +28,7 @@ class ResponseLimitsTest {
         server.shutdown()
     }
 
-    private fun client(directory: String? = null) = OpenCodeClient(server.url("/").toString(), directory = directory)
+    private fun client(directory: String? = null) = OpenCodeClient(server.url("/").toString(), directory = directory, protocol = ServerProtocol.V1)
 
     private fun hugeFile(): String {
         val content = "x".repeat((OpenCodeClient.MAX_FILE_BYTES + 1).toInt())

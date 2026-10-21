@@ -25,7 +25,7 @@ class OpenCodeClientProjectsTest {
         server.shutdown()
     }
 
-    private fun client(directory: String? = null) = OpenCodeClient(server.url("/").toString(), directory = directory)
+    private fun client(directory: String? = null) = OpenCodeClient(server.url("/").toString(), directory = directory, protocol = ServerProtocol.V1)
 
     private fun json(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
 

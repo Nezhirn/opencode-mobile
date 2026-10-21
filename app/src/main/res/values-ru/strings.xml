@@ -254,6 +254,7 @@
     <string name="error_server_url_invalid">Введите адрес сервера, например http://192.168.1.10:4096</string>
     <string name="error_response_too_large">Ответ сервера больше %1$d МБ</string>
     <string name="error_response_out_of_memory">Ответ сервера не помещается в память, доступную приложению</string>
+    <string name="error_unauthorized">Неверное имя пользователя или пароль. opencode 2 печатает пароль при запуске сервера (постоянный можно задать через OPENCODE_PASSWORD); имя пользователя — opencode.</string>
     <string name="error_attachments_total">Вложения одного сообщения не должны превышать %1$d МБ вместе</string>
     <string name="error_attachment_empty">Файл %1$s пуст</string>
     <string name="attach_reading">Чтение файлов…</string>

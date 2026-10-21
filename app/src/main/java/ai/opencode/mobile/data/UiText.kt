@@ -1,6 +1,7 @@
 package ai.opencode.mobile.data
 
 import ai.opencode.mobile.R
+import ai.opencode.mobile.data.remote.OpenCodeException
 import ai.opencode.mobile.data.remote.ResponseTooLargeException
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
@@ -25,6 +26,7 @@ internal fun uiText(@StringRes id: Int, vararg args: Any): UiText = UiText.Res(i
 
 /** The error's own message when it has one, otherwise the localised [fallback]. */
 internal fun Throwable.toUiText(@StringRes fallback: Int, vararg args: Any): UiText {
+    if (this is OpenCodeException && code == 401) return UiText.Res(R.string.error_unauthorized, emptyList())
     if (this is ResponseTooLargeException) {
         if (outOfMemory) return UiText.Res(R.string.error_response_out_of_memory, emptyList())
         return UiText.Res(R.string.error_response_too_large, listOf((limitBytes / (1024 * 1024)).toInt()))

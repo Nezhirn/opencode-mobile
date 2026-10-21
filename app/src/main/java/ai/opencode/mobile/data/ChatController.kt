@@ -254,8 +254,10 @@ internal class ChatController(
      */
     private suspend fun readHistory(client: OpenCodeClient, sessionId: String, tailOnly: Boolean): List<ChatMessageUi> {
         if (tailOnly) {
-            val tail = client.getMessages(sessionId, limit = RESYNC_TAIL_MESSAGES).toUiMessages()
-            if (tail.size < RESYNC_TAIL_MESSAGES) return tail
+            val (recent, complete) = client.getRecentMessages(sessionId, limit = RESYNC_TAIL_MESSAGES)
+            val tail = recent.toUiMessages()
+            if (complete) return tail
+            if (tail.isEmpty()) return client.getMessages(sessionId).toUiMessages()
             val live = _state.value.takeIf { it.sessionId == sessionId }?.messages.orEmpty()
             val joinAt = live.indexOfFirst { it.info.id == tail.first().info.id }
             if (joinAt >= 0) {

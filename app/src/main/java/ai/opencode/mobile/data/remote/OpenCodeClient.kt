@@ -1,6 +1,7 @@
 package ai.opencode.mobile.data.remote
 
 import ai.opencode.mobile.BuildConfig
+import ai.opencode.mobile.data.remote.v2.V2Backend
 import android.annotation.SuppressLint
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -9,7 +10,13 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
@@ -17,6 +24,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -55,6 +63,11 @@ import kotlin.coroutines.resumeWithException
  * directory, and sessions, files, permissions and the event stream all belong
  * to one; it is therefore sent with every instance-scoped request. Null talks
  * to the server's default instance.
+ *
+ * Servers of opencode 1.x (the v1 API) and 2.x (the v2 API under `/api`) are
+ * both spoken to; which one it is is asked once, on the first call, unless
+ * [protocol] says. A v2 server's answers and events are mapped onto the v1
+ * shapes the rest of the app works with ([V2Backend]).
  */
 class OpenCodeClient(
     baseUrl: String,
@@ -62,8 +75,39 @@ class OpenCodeClient(
     private val password: String? = null,
     private val allowInsecureTls: Boolean = false,
     val directory: String? = null,
+    protocol: ServerProtocol? = null,
 ) {
     val baseUrl: String = normalizeBaseUrl(baseUrl)
+
+    @Volatile
+    private var detected: ServerProtocol? = protocol
+    private val detectLock = Mutex()
+    private val v2Backend by lazy { V2Backend(this) }
+
+    /**
+     * The API the server speaks, asked once: a v2 server answers `/api/info`
+     * with its version, a v1 server with 404 or its web page. A failed request
+     * is not remembered, so the next call asks again.
+     */
+    suspend fun protocol(): ServerProtocol {
+        detected?.let { return it }
+        return detectLock.withLock {
+            detected ?: detectProtocol().also { detected = it }
+        }
+    }
+
+    private suspend fun detectProtocol(): ServerProtocol {
+        val response = fetch(newRequest("GET", "/api/info", accept = "application/json"))
+        if (response.code == 401) throw OpenCodeException(response.code, extractError(response.text, response.message))
+        if (!response.isSuccessful) return ServerProtocol.V1
+        val version = runCatching { (json.parseToJsonElement(response.text) as? JsonObject)?.stringOrNull("version") }.getOrNull()
+            ?: return ServerProtocol.V1
+        val major = version.trimStart('v').substringBefore('.').toIntOrNull() ?: return ServerProtocol.V1
+        return if (major >= 2) ServerProtocol.V2 else ServerProtocol.V1
+    }
+
+    /** The v2 backend when the server speaks v2, null for a v1 server. */
+    private suspend fun v2(): V2Backend? = if (protocol() == ServerProtocol.V2) v2Backend else null
 
     private val json: Json = OpenCodeJson
 
@@ -100,7 +144,7 @@ class OpenCodeClient(
         (if (allowInsecureTls) insecureSseClient else sseClient)
             .interceptors.any { it is HttpLoggingInterceptor }
 
-    private fun newRequest(
+    internal fun newRequest(
         method: String,
         path: String,
         query: Map<String, String?> = emptyMap(),
@@ -117,8 +161,15 @@ class OpenCodeClient(
         return builder.build()
     }
 
-    /** Status line and fully read body of a finished call. */
-    private class HttpResult(val code: Int, val message: String, val isSuccessful: Boolean, val text: String)
+    /** Status line and fully read body of a finished call: as text, or as [bytes] when asked for raw. */
+    internal class HttpResult(
+        val code: Int,
+        val message: String,
+        val isSuccessful: Boolean,
+        val text: String,
+        val bytes: ByteArray? = null,
+        val contentType: String? = null,
+    )
 
     /**
      * Runs [request] and reads its body so that cancelling the coroutine cancels
@@ -130,10 +181,11 @@ class OpenCodeClient(
      * Bodies larger than [maxBodyBytes] are refused instead of read: the whole
      * body is held in memory, and a huge file or diff ran the app out of it.
      */
-    private suspend fun fetch(
+    internal suspend fun fetch(
         request: Request,
         maxBodyBytes: Long = MAX_BODY_BYTES,
         longRunning: Boolean = false,
+        raw: Boolean = false,
     ): HttpResult {
         // A POST that already reached the server must not be replayed after a
         // connection reset: a repeated prompt_async runs the prompt twice.
@@ -158,7 +210,13 @@ class OpenCodeClient(
                         // callback on its own thread, which kills the process, and
                         // the coroutine would never resume.
                         val result = try {
-                            response.use { HttpResult(it.code, it.message, it.isSuccessful, it.readBody(maxBodyBytes)) }
+                            response.use {
+                                if (raw) {
+                                    HttpResult(it.code, it.message, it.isSuccessful, "", it.readBytes(maxBodyBytes), it.header("Content-Type"))
+                                } else {
+                                    HttpResult(it.code, it.message, it.isSuccessful, it.readBody(maxBodyBytes))
+                                }
+                            }
                         } catch (error: OutOfMemoryError) {
                             continuation.resumeWithException(ResponseTooLargeException(maxBodyBytes, outOfMemory = true))
                             return
@@ -173,7 +231,7 @@ class OpenCodeClient(
         }
     }
 
-    private suspend fun <T> execute(
+    internal suspend fun <T> execute(
         request: Request,
         deserializer: DeserializationStrategy<T>,
         maxBodyBytes: Long = MAX_BODY_BYTES,
@@ -203,7 +261,7 @@ class OpenCodeClient(
         }
     }
 
-    private suspend fun executeUnit(
+    internal suspend fun executeUnit(
         method: String,
         path: String,
         query: Map<String, String?> = emptyMap(),
@@ -232,7 +290,7 @@ class OpenCodeClient(
         return REQUEST_TIMEOUT_MILLIS + bodyBytes / UPLOAD_BYTES_PER_EXTRA_SECOND * 1_000
     }
 
-    private fun extractError(text: String, fallback: String): String {
+    internal fun extractError(text: String, fallback: String): String {
         if (text.isBlank()) return fallback
         // A proxy error page (nginx, Cloudflare) is HTML and can be kilobytes
         // long: it must not end up verbatim in an error banner.
@@ -255,9 +313,10 @@ class OpenCodeClient(
     private fun shortened(text: String): String =
         if (text.length <= MAX_ERROR_CHARS) text else text.take(MAX_ERROR_CHARS) + "…"
 
-    private fun jsonBody(value: Any): RequestBody {
+    internal fun jsonBody(value: Any): RequestBody {
         val encoded = when (value) {
             is String -> value
+            is JsonElement -> json.encodeToString(JsonElement.serializer(), value)
             else -> {
                 @Suppress("UNCHECKED_CAST")
                 json.encodeToString(serializerFor(value) as KSerializer<Any>, value)
@@ -277,18 +336,19 @@ class OpenCodeClient(
     }
 
     // --- Endpoints ---
+    // Each one asks the v2 backend first when the server speaks v2.
 
     suspend fun health(): Health =
-        execute(newRequest("GET", "/global/health"), Health.serializer())
+        v2()?.health() ?: execute(newRequest("GET", "/global/health"), Health.serializer())
 
     suspend fun listSessions(): List<Session> =
-        execute(newRequest("GET", "/session"), ListSerializer(Session.serializer()))
+        v2()?.listSessions() ?: execute(newRequest("GET", "/session"), ListSerializer(Session.serializer()))
 
     /** Every project the server knows, `global` (non-git directories) included. */
     suspend fun listProjects(): List<Project> =
-        execute(newRequest("GET", "/project"), ListSerializer(Project.serializer()))
+        v2()?.listProjects() ?: execute(newRequest("GET", "/project"), ListSerializer(Project.serializer()))
 
-    suspend fun pathInfo(): PathInfo = execute(newRequest("GET", "/path"), PathInfo.serializer())
+    suspend fun pathInfo(): PathInfo = v2()?.pathInfo() ?: execute(newRequest("GET", "/path"), PathInfo.serializer())
 
     /**
      * Sessions of every project with their directories, newest first. Servers
@@ -296,7 +356,7 @@ class OpenCodeClient(
      * [listSessions], which only covers the default instance's project.
      */
     suspend fun listAllSessions(): List<SessionSummary> =
-        execute(
+        v2()?.listAllSessions() ?: execute(
             newRequest("GET", "/api/session", query = mapOf("limit" to "$ALL_SESSIONS_LIMIT", "order" to "desc")),
             SessionSummaryPage.serializer(),
         ).data
@@ -306,7 +366,7 @@ class OpenCodeClient(
      * folder picker). Paths in the answer are relative to [root].
      */
     suspend fun findDirectories(query: String, root: String): List<String> =
-        execute(
+        v2()?.findDirectories(query, root) ?: execute(
             newRequest(
                 "GET",
                 "/find/file",
@@ -323,7 +383,7 @@ class OpenCodeClient(
 
     /** Files of the current project whose path matches [query], relative to its root. */
     suspend fun findFiles(query: String): List<String> =
-        execute(
+        v2()?.findFiles(query) ?: execute(
             newRequest(
                 "GET",
                 "/find/file",
@@ -334,58 +394,74 @@ class OpenCodeClient(
 
     /** Lists [path] (relative) under [root] instead of the current project. */
     suspend fun listFilesIn(root: String, path: String): List<FileNode> =
-        execute(
+        v2()?.listFiles(path, root) ?: execute(
             newRequest("GET", "/file", query = mapOf("path" to path, DIRECTORY_QUERY to root)),
             ListSerializer(FileNode.serializer()),
         )
 
     suspend fun createSession(request: CreateSessionRequest): Session =
-        execute(newRequest("POST", "/session", body = jsonBody(request)), Session.serializer())
+        v2()?.createSession(request) ?: execute(newRequest("POST", "/session", body = jsonBody(request)), Session.serializer())
 
-    suspend fun deleteSession(sessionId: String) =
+    suspend fun deleteSession(sessionId: String) {
+        v2()?.let { return it.deleteSession(sessionId) }
         executeUnit("DELETE", "/session/$sessionId")
+    }
 
     suspend fun getSession(sessionId: String): Session =
-        execute(newRequest("GET", "/session/$sessionId"), Session.serializer())
+        v2()?.getSession(sessionId) ?: execute(newRequest("GET", "/session/$sessionId"), Session.serializer())
 
     /**
      * The session's messages, oldest first: all of them, or with [limit] only
      * that many of the newest (servers without paging send all of them anyway).
      */
     suspend fun getMessages(sessionId: String, limit: Int? = null): List<MessageWithParts> =
-        execute(
+        v2()?.getMessages(sessionId, limit) ?: execute(
             newRequest("GET", "/session/$sessionId/message", query = mapOf("limit" to limit?.toString())),
             ListSerializer(MessageWithParts.serializer()),
             maxBodyBytes = MAX_HISTORY_BYTES,
         )
 
-    suspend fun promptAsync(sessionId: String, request: PromptRequest) =
+    /** The newest [limit] messages, oldest first, and whether they are the whole history. */
+    suspend fun getRecentMessages(sessionId: String, limit: Int): Pair<List<MessageWithParts>, Boolean> {
+        v2()?.let { return it.getRecentMessages(sessionId, limit) }
+        val messages = getMessages(sessionId, limit)
+        return messages to (messages.size < limit)
+    }
+
+    suspend fun promptAsync(sessionId: String, request: PromptRequest) {
+        v2()?.let { return it.prompt(sessionId, request) }
         executeUnit("POST", "/session/$sessionId/prompt_async", body = jsonBody(request))
+    }
 
     /** Run state of every session that is not idle, keyed by session id. */
     suspend fun sessionStatus(): Map<String, SessionStatusInfo> =
-        execute(
+        v2()?.sessionStatus() ?: execute(
             newRequest("GET", "/session/status"),
             MapSerializer(String.serializer(), SessionStatusInfo.serializer()),
         )
 
-    suspend fun abort(sessionId: String) =
+    suspend fun abort(sessionId: String) {
+        v2()?.let { return it.abort(sessionId) }
         executeUnit("POST", "/session/$sessionId/abort")
+    }
 
     /**
      * Compacts the session (the web client's `/compact`): the server adds a
      * message marking the compaction and has [model] summarize the history,
-     * which later prompts get in place of it. The call only returns once the
-     * summary is written, which can take minutes, so it gets no read timeout;
-     * the progress arrives through the event stream as for a prompt.
+     * which later prompts get in place of it. On a v1 server the call only
+     * returns once the summary is written, which can take minutes, so it gets
+     * no read timeout; a v2 server takes it and returns at once. Either way the
+     * progress arrives through the event stream as for a prompt.
      */
-    suspend fun summarize(sessionId: String, model: PromptModel) =
+    suspend fun summarize(sessionId: String, model: PromptModel) {
+        v2()?.let { return it.compact(sessionId, model) }
         executeUnit(
             "POST",
             "/session/$sessionId/summarize",
             body = jsonBody(SummarizeRequest(providerID = model.providerID, modelID = model.modelID)),
             longRunning = true,
         )
+    }
 
     /**
      * Rolls the session back to just before [messageId]: the message and all
@@ -393,76 +469,83 @@ class OpenCodeClient(
      * The server refuses while the session is busy.
      */
     suspend fun revert(sessionId: String, messageId: String): Session =
-        execute(
+        v2()?.revert(sessionId, messageId) ?: execute(
             newRequest("POST", "/session/$sessionId/revert", body = jsonBody(RevertRequest(messageID = messageId))),
             Session.serializer(),
         )
 
     /** Undoes [revert]: the hidden messages and file changes come back. */
     suspend fun unrevert(sessionId: String): Session =
-        execute(newRequest("POST", "/session/$sessionId/unrevert"), Session.serializer())
+        v2()?.unrevert(sessionId) ?: execute(newRequest("POST", "/session/$sessionId/unrevert"), Session.serializer())
 
     suspend fun listPermissions(): List<PermissionRequest> =
-        execute(newRequest("GET", "/permission"), ListSerializer(PermissionRequest.serializer()))
+        v2()?.listPermissions() ?: execute(newRequest("GET", "/permission"), ListSerializer(PermissionRequest.serializer()))
 
-    suspend fun replyPermission(requestId: String, reply: String, message: String? = null) =
+    /** [sessionId] is the request's session: v2 answers a request within its session. */
+    suspend fun replyPermission(requestId: String, reply: String, message: String? = null, sessionId: String? = null) {
+        v2()?.let { return it.replyPermission(requestId, reply, message, sessionId) }
         executeUnit(
             "POST",
             "/permission/$requestId/reply",
             body = jsonBody(PermissionReplyRequest(reply = reply, message = message)),
         )
+    }
 
     suspend fun listQuestions(): List<QuestionRequest> =
-        execute(newRequest("GET", "/question"), ListSerializer(QuestionRequest.serializer()))
+        v2()?.listQuestions() ?: execute(newRequest("GET", "/question"), ListSerializer(QuestionRequest.serializer()))
 
-    suspend fun replyQuestion(requestId: String, answers: List<List<String>>) =
+    suspend fun replyQuestion(requestId: String, answers: List<List<String>>, sessionId: String? = null) {
+        v2()?.let { return it.replyQuestion(requestId, answers, sessionId) }
         executeUnit(
             "POST",
             "/question/$requestId/reply",
             body = jsonBody(QuestionReplyRequest(answers = answers)),
         )
+    }
 
-    suspend fun rejectQuestion(requestId: String) =
+    suspend fun rejectQuestion(requestId: String, sessionId: String? = null) {
+        v2()?.let { return it.rejectQuestion(requestId, sessionId) }
         executeUnit("POST", "/question/$requestId/reject")
+    }
 
     /** Full models.dev catalogue plus `connected`; prefer [configProviders]. */
     suspend fun listProviders(): ProviderList =
-        execute(newRequest("GET", "/provider"), ProviderList.serializer())
+        v2()?.configProviders()?.asProviderList() ?: execute(newRequest("GET", "/provider"), ProviderList.serializer())
 
     /** Only the providers opencode is configured for, with their models. */
     suspend fun configProviders(): ConfigProviders =
-        execute(newRequest("GET", "/config/providers"), ConfigProviders.serializer())
+        v2()?.configProviders() ?: execute(newRequest("GET", "/config/providers"), ConfigProviders.serializer())
 
     suspend fun listAgents(): List<Agent> =
-        execute(newRequest("GET", "/agent"), ListSerializer(Agent.serializer()))
+        v2()?.listAgents() ?: execute(newRequest("GET", "/agent"), ListSerializer(Agent.serializer()))
 
     suspend fun listFiles(path: String): List<FileNode> =
-        execute(
+        v2()?.listFiles(path, root = null) ?: execute(
             newRequest("GET", "/file", query = mapOf("path" to path)),
             ListSerializer(FileNode.serializer()),
         )
 
     suspend fun readFile(path: String): FileContent =
-        execute(
+        v2()?.readFile(path) ?: execute(
             newRequest("GET", "/file/content", query = mapOf("path" to path)),
             FileContent.serializer(),
             maxBodyBytes = MAX_FILE_BYTES,
         )
 
-    suspend fun vcsInfo(): VcsInfo = execute(newRequest("GET", "/vcs"), VcsInfo.serializer())
+    suspend fun vcsInfo(): VcsInfo = v2()?.vcsInfo() ?: execute(newRequest("GET", "/vcs"), VcsInfo.serializer())
 
     suspend fun vcsStatus(): List<VcsFileStatus> =
-        execute(newRequest("GET", "/vcs/status"), ListSerializer(VcsFileStatus.serializer()))
+        v2()?.vcsStatus() ?: execute(newRequest("GET", "/vcs/status"), ListSerializer(VcsFileStatus.serializer()))
 
     suspend fun vcsDiff(mode: String): List<VcsFileDiff> =
-        execute(
+        v2()?.vcsDiff(mode) ?: execute(
             newRequest("GET", "/vcs/diff", query = mapOf("mode" to mode)),
             ListSerializer(VcsFileDiff.serializer()),
             maxBodyBytes = MAX_DIFF_BYTES,
         )
 
     suspend fun sessionDiff(sessionId: String): List<VcsFileDiff> =
-        execute(
+        v2()?.sessionDiff(sessionId) ?: execute(
             newRequest("GET", "/session/$sessionId/diff"),
             ListSerializer(VcsFileDiff.serializer()),
             maxBodyBytes = MAX_DIFF_BYTES,
@@ -470,21 +553,21 @@ class OpenCodeClient(
 
     /** Status of every MCP server opencode knows about, keyed by name. */
     suspend fun mcpStatus(): Map<String, McpStatus> =
-        execute(
+        v2()?.mcpStatus() ?: execute(
             newRequest("GET", "/mcp"),
             MapSerializer(String.serializer(), McpStatus.serializer()),
         )
 
     /** Connects an MCP server until opencode restarts (the config is untouched). */
     suspend fun mcpConnect(name: String): Boolean =
-        execute(newRequest("POST", "/mcp/${pathSegment(name)}/connect"), Boolean.serializer())
+        v2()?.mcpConnect(name, connect = true) ?: execute(newRequest("POST", "/mcp/${pathSegment(name)}/connect"), Boolean.serializer())
 
     /** Disconnects an MCP server until opencode restarts (the config is untouched). */
     suspend fun mcpDisconnect(name: String): Boolean =
-        execute(newRequest("POST", "/mcp/${pathSegment(name)}/disconnect"), Boolean.serializer())
+        v2()?.mcpConnect(name, connect = false) ?: execute(newRequest("POST", "/mcp/${pathSegment(name)}/disconnect"), Boolean.serializer())
 
     suspend fun todos(sessionId: String): List<Todo> =
-        execute(
+        v2()?.todos(sessionId) ?: execute(
             newRequest("GET", "/session/$sessionId/todo"),
             ListSerializer(Todo.serializer()),
         )
@@ -492,25 +575,54 @@ class OpenCodeClient(
     /**
      * Subscribes to the server-sent event stream. The flow completes when the
      * connection is closed; collect it in a scope that cancels on disconnect.
+     * A v2 server's events arrive translated into the v1 ones.
      */
-    fun events(): Flow<EventEnvelope> = callbackFlow {
-        val request = newRequest("GET", "/event", accept = "text/event-stream")
+    fun events(): Flow<EventEnvelope> = flow {
+        val v2 = v2()
+        if (v2 == null) {
+            emitAll(
+                rawEvents("/event").mapNotNull { data ->
+                    if (data == null) return@mapNotNull EventEnvelope(type = STREAM_OPENED_EVENT)
+                    runCatching { json.decodeFromString<EventEnvelope>(data) }
+                        .onFailure { error -> Log.w(TAG, "Failed to parse event: $data", error) }
+                        .getOrNull()
+                },
+            )
+        } else {
+            val translator = v2.eventTranslator()
+            emitAll(
+                rawEvents("/api/event").transform { data ->
+                    if (data == null) {
+                        emit(EventEnvelope(type = STREAM_OPENED_EVENT))
+                        return@transform
+                    }
+                    val event = runCatching { json.parseToJsonElement(data) as? JsonObject }
+                        .onFailure { error -> Log.w(TAG, "Failed to parse event: $data", error) }
+                        .getOrNull() ?: return@transform
+                    translator.translate(event).forEach { emit(it) }
+                },
+            )
+        }
+    }
+
+    /**
+     * The `data` of each event of the stream at [path], with null once the
+     * server accepted the subscription (response headers received).
+     */
+    private fun rawEvents(path: String): Flow<String?> = callbackFlow {
+        val request = newRequest("GET", path, accept = "text/event-stream")
         val eventClient = if (allowInsecureTls) insecureSseClient else sseClient
         val factory = EventSources.createFactory(eventClient)
         val listener = object : EventSourceListener() {
             override fun onOpen(eventSource: EventSource, response: Response) {
-                trySend(EventEnvelope(type = STREAM_OPENED_EVENT))
+                trySend(null)
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                runCatching { json.decodeFromString<EventEnvelope>(data) }
-                    .onSuccess { envelope ->
-                        val result = trySend(envelope)
-                        if (result.isFailure) {
-                            Log.w(TAG, "Event buffer rejected event: ${result.exceptionOrNull()}")
-                        }
-                    }
-                    .onFailure { error -> Log.w(TAG, "Failed to parse event: $data", error) }
+                val result = trySend(data)
+                if (result.isFailure) {
+                    Log.w(TAG, "Event buffer rejected event: ${result.exceptionOrNull()}")
+                }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
@@ -664,6 +776,9 @@ class OpenCodeClient(
 
 class OpenCodeException(val code: Int, override val message: String) : IOException(message)
 
+/** The API an opencode server speaks: 1.x servers v1, 2.x servers v2 (under `/api`). */
+enum class ServerProtocol { V1, V2 }
+
 /**
  * The server's answer was too large to hold in memory: over [limitBytes], or
  * [outOfMemory] when the device ran out of memory before reaching the limit.
@@ -683,6 +798,15 @@ private fun Response.readBody(maxBytes: Long): String {
     val source = body.source()
     if (source.request(maxBytes + 1)) throw ResponseTooLargeException(maxBytes)
     return source.buffer.readString(body.contentType()?.charset() ?: Charsets.UTF_8)
+}
+
+/** The body as bytes, refusing more than [maxBytes] like [readBody]. */
+private fun Response.readBytes(maxBytes: Long): ByteArray {
+    val body = body ?: return ByteArray(0)
+    if (body.contentLength() > maxBytes) throw ResponseTooLargeException(maxBytes)
+    val source = body.source()
+    if (source.request(maxBytes + 1)) throw ResponseTooLargeException(maxBytes)
+    return source.buffer.readByteArray()
 }
 
 private fun JsonObject.stringOrNull(key: String): String? =

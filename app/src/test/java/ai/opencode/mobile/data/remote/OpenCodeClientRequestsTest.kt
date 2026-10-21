@@ -31,7 +31,7 @@ class OpenCodeClientRequestsTest {
         server.shutdown()
     }
 
-    private fun client() = OpenCodeClient(server.url("/").toString())
+    private fun client() = OpenCodeClient(server.url("/").toString(), protocol = ServerProtocol.V1)
 
     @Test
     fun abortSendsPostWithEmptyBody() = runBlocking {

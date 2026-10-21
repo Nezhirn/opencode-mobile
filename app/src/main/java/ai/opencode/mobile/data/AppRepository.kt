@@ -882,21 +882,28 @@ class AppRepository(private val settingsStore: SettingsSource) {
             requestId = requestId,
             failure = R.string.error_reply_permission,
             onAnswered = { _permissions.update { current -> current.filterNot { it.id == requestId } } },
-        ) { client -> client.replyPermission(requestId, reply) }
+        ) { client ->
+            val sessionId = _permissions.value.firstOrNull { it.id == requestId }?.sessionID
+            client.replyPermission(requestId, reply, sessionId = sessionId)
+        }
 
     fun replyQuestion(requestId: String, answers: List<List<String>>) =
         answer(
             requestId = requestId,
             failure = R.string.error_reply_question,
             onAnswered = { removeQuestion(requestId) },
-        ) { client -> client.replyQuestion(requestId, answers) }
+        ) { client -> client.replyQuestion(requestId, answers, sessionId = questionSession(requestId)) }
 
     fun rejectQuestion(requestId: String) =
         answer(
             requestId = requestId,
             failure = R.string.error_reject_question,
             onAnswered = { removeQuestion(requestId) },
-        ) { client -> client.rejectQuestion(requestId) }
+        ) { client -> client.rejectQuestion(requestId, sessionId = questionSession(requestId)) }
+
+    /** The session a question was asked in: a v2 server answers it within that session. */
+    private fun questionSession(requestId: String): String? =
+        _questions.value.firstOrNull { it.id == requestId }?.sessionID?.takeIf { it.isNotBlank() }
 
     private fun removeQuestion(requestId: String) {
         _questions.update { current -> current.filterNot { it.id == requestId } }
